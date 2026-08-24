@@ -1,93 +1,34 @@
 # Google Sheets Integration
 
-This document covers the one-time OAuth setup, API activation, validation test, and the important errors encountered while connecting HammDroid to Google Sheets.
+This documents the **tested** Google Sheets integration for HammDroid: OAuth authentication, API activation, and a small create/write/read validation.
 
 ## Why Sheets
 
-Google Sheets is used as the job-state layer so HammDroid can store and update structured job data without clicking through the spreadsheet UI.
-
-The intended split is:
+Google Sheets is being used as a lightweight structured state layer for job-search data instead of driving the spreadsheet through browser automation.
 
 ```text
-API  -> state, tracking, updates
-Browser -> application sites and tasks that genuinely require a browser
+Hermes / HammDroid
+        ↓
+Google Sheets API
+        ↓
+structured job state
 ```
 
-## 1. Create a Google Cloud project
+## Tested result
 
-Create a dedicated Google Cloud project for the agent integration. This keeps OAuth configuration and API enablement separate from unrelated work.
+The end-to-end validation was intentionally small:
 
-## 2. Configure Google Auth Platform
+1. create a temporary spreadsheet
+2. write known values
+3. read the same values back
 
-For a private personal integration:
+The create → write → read test succeeded after the Sheets API was enabled.
 
-- set the application name
-- provide a support email
-- use an **External** audience if required for the account type
-- keep the application in **Testing** while developing
-- add the Google account that will authorize the integration as a **Test user**
+`append` behavior has **not** been separately validated.
 
-If the account is not added as a test user, Google may return:
+## OAuth scope
 
-```text
-Error 403: access_denied
-```
-
-with a message saying the application has not completed verification.
-
-## 3. Create a Desktop OAuth client
-
-Create an OAuth 2.0 client with:
-
-```text
-Application type: Desktop app
-```
-
-Download the client JSON and keep it out of the repository.
-
-## 4. Point Hermes at its credential home
-
-Hermes derives its credential location from `HERMES_HOME` when that environment variable is available.
-
-Example:
-
-```powershell
-$env:HERMES_HOME = "E:\AI\Hermes"
-```
-
-For a persistent Windows user environment variable:
-
-```powershell
-[Environment]::SetEnvironmentVariable("HERMES_HOME","E:\AI\Hermes","User")
-```
-
-Use paths appropriate for your own installation.
-
-## 5. Store the OAuth client through Hermes
-
-Use the Python interpreter from the Hermes virtual environment rather than installing another Python runtime just for this step.
-
-Example pattern:
-
-```powershell
-& "<HERMES_INSTALL>\venv\Scripts\python.exe" `
-  "<HERMES_INSTALL>\skills\productivity\google-workspace\scripts\setup.py" `
-  --client-secret "<PATH_TO_DOWNLOADED_CLIENT_JSON>"
-```
-
-## 6. Generate the authorization URL
-
-```powershell
-& "<HERMES_INSTALL>\venv\Scripts\python.exe" `
-  "<HERMES_INSTALL>\skills\productivity\google-workspace\scripts\setup.py" `
-  --auth-url
-```
-
-Open the generated Google authorization URL in a browser.
-
-## 7. Grant only the permissions you intend to use
-
-For this project, Google Sheets access was granted while general Google Drive browsing was declined.
+The tested setup grants Google Sheets access without general Google Drive browsing access.
 
 ```text
 Google Sheets access      allowed
@@ -98,39 +39,25 @@ Contacts                  not granted
 Docs                       not granted
 ```
 
-The Sheets OAuth scope is still broader than a single spreadsheet, so HammDroid also has a behavioral rule restricting normal operation to the designated job tracker.
+The Sheets scope is broader than one spreadsheet, so normal agent behavior is still restricted to the intended job tracker.
 
-## 8. Handle the localhost callback
+## Problems encountered
 
-The Desktop OAuth flow may redirect to a localhost address that does not load successfully in the browser.
+### OAuth test-user access
 
-That does not necessarily mean OAuth failed. If the callback URL contains the authorization response, provide the complete callback URL to the Hermes OAuth helper.
+An early authorization attempt returned `403 access_denied` while the OAuth app was in testing mode.
 
-Do not publish callback URLs containing authorization codes.
+The authorizing account needed to be listed as a test user.
 
-Example exchange:
+### Localhost callback
 
-```powershell
-& "<HERMES_INSTALL>\venv\Scripts\python.exe" `
-  "<HERMES_INSTALL>\skills\productivity\google-workspace\scripts\setup.py" `
-  --auth-code "<FULL_CALLBACK_URL>"
-```
+The Desktop OAuth flow redirected to localhost. A browser page failing to load did not necessarily mean authorization had failed; the callback URL still contained the authorization response needed by the OAuth helper.
 
-## 9. Verify authentication
+Authorization codes and callback URLs containing codes are not stored in this repository.
 
-```powershell
-& "<HERMES_INSTALL>\venv\Scripts\python.exe" `
-  "<HERMES_INSTALL>\skills\productivity\google-workspace\scripts\setup.py" `
-  --check
-```
+### Sheets API disabled
 
-A partial-scope warning is not automatically an authentication failure. It can mean the user intentionally declined permissions the bundled Workspace integration also knows how to use.
-
-## 10. Enable the Google Sheets API
-
-OAuth and API activation are separate controls.
-
-The first create request returned:
+The first spreadsheet-create request returned:
 
 ```text
 HTTP 403
@@ -138,91 +65,37 @@ SERVICE_DISABLED
 service=sheets.googleapis.com
 ```
 
-That meant:
+That showed authentication was working but the Google Sheets API itself was disabled for the Cloud project. Enabling the API fixed that issue without changing OAuth scopes.
+
+### Malformed write request
+
+A later write returned HTTP 400 because the requested range/value shape was malformed. That was a request-format issue rather than an authentication problem.
+
+## Troubleshooting lesson
+
+These failures were useful because they occurred at different layers:
 
 ```text
-OAuth authentication       working
-Token loading              working
-Request reached Google     working
-Sheets API service         disabled
+OAuth authorization
+      ↓
+API enabled/disabled state
+      ↓
+request formatting
+      ↓
+spreadsheet operation
 ```
 
-The correct fix was to enable **Google Sheets API** in the same Cloud project and retry the same operation. No new OAuth flow or framework modification was required.
+Treating every failure as an authentication problem would have led to unnecessary reconfiguration.
 
-## 11. Validate create -> write -> read
+## Security
 
-The end-to-end test was deliberately small:
-
-1. create a temporary spreadsheet
-2. write known values
-3. read the same values back
-
-Example range:
-
-```text
-A1:A2
-```
-
-Example values:
-
-```text
-test_value_1
-test_value_2
-```
-
-Expected logical read-back:
-
-```json
-[
-  ["test_value_1"],
-  ["test_value_2"]
-]
-```
-
-The test passed after the API was enabled.
-
-## Errors encountered
-
-### OAuth app not verified
-
-**Symptom:** `403 access_denied`
-
-**Cause:** the OAuth app was in Testing mode and the authorizing account was not listed as a test user.
-
-**Fix:** add the account under **Audience / Test users**.
-
-### Browser blocks localhost callback
-
-**Meaning:** the page failing to load does not automatically mean OAuth failed. The authorization response may still be present in the callback URL.
-
-### `SERVICE_DISABLED`
-
-**Meaning:** OAuth is valid, but `sheets.googleapis.com` is disabled for the Cloud project.
-
-**Fix:** enable Google Sheets API and retry the same request.
-
-### HTTP 400 on a write
-
-Spreadsheet creation succeeded, but one write request returned HTTP 400 because the requested range/value shape was malformed.
-
-This was a request-format problem, not an authentication problem.
-
-### Missing Drive scope
-
-The token was valid but did not include general Drive read access. That was intentional.
-
-A failed Drive cleanup operation was not treated as a reason to expand OAuth permissions. The one-time test spreadsheet could be deleted manually instead.
-
-## Security notes
-
-Never commit or publish:
+Do not commit:
 
 - OAuth client JSON files
-- token files
-- refresh tokens
+- token or refresh-token files
 - authorization codes
 - callback URLs containing codes
-- `.env` files containing secrets
-- browser profiles or session cookies
+- `.env` secrets
+- browser profiles/session cookies
 
-The important runtime token should be treated as more sensitive than the downloaded Desktop OAuth client definition because it represents the account authorization granted to the application.
+This repository documents the integration behavior, not the credentials used to authorize it.

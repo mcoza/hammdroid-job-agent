@@ -4,13 +4,19 @@ A local-first AI job-search agent built with **Hermes Agent**, a locally served 
 
 The goal is to automate repetitive discovery and tracking while keeping consequential actions — authentication, security prompts, and application submission — under human control.
 
-## Project status
+## Current status
+
+### Working
 
 - [x] Local agent running through Hermes
-- [x] Google OAuth authentication working
-- [x] Google Sheets API enabled
-- [x] Create → write → read round-trip validated
-- [x] Agent authentication/troubleshooting guardrails established
+- [x] Google OAuth authentication
+- [x] Google Sheets API integration
+- [x] Create → write → read round-trip validation
+
+### Designed / in progress
+
+- [x] Agent guardrail policy
+- [x] Job workflow architecture
 - [ ] Production job tracker
 - [ ] Scout Mode batch discovery
 - [ ] Human approval queue
@@ -34,18 +40,14 @@ flowchart LR
 
 ## Documentation
 
-The repository is organized as a step-by-step build rather than one giant README.
+The repo is intentionally small. Each document covers one real part of the system:
 
-| Step | Document | What it covers |
-|---:|---|---|
-| 1 | [Architecture](docs/01-architecture.md) | System components, modes, and trust boundary |
-| 2 | [Google OAuth Setup](docs/02-google-oauth-setup.md) | Desktop OAuth setup and credential handling |
-| 3 | [Sheets API Validation](docs/03-sheets-api-validation.md) | End-to-end create → write → read test |
-| 4 | [Agent Guardrails](docs/04-agent-guardrails.md) | Preventing autonomous auth/config changes and retry loops |
-| 5 | [Job Tracker Workflow](docs/05-job-tracker-workflow.md) | Scout → Sheet → Approval → Apply state model |
-| 6 | [Troubleshooting](docs/06-troubleshooting.md) | Real errors encountered and what they actually meant |
-
-See the full [documentation index](docs/README.md).
+| Document | Purpose |
+|---|---|
+| [Architecture](docs/architecture.md) | Components, modes, and trust boundary |
+| [Google Sheets Integration](docs/google-sheets-integration.md) | OAuth setup, API enablement, validation, and real errors encountered |
+| [Agent Guardrails](docs/guardrails.md) | Limits on authentication, troubleshooting, and autonomous changes |
+| [Job Workflow](docs/job-workflow.md) | Scout → Sheet → Approval → Apply state model |
 
 ## Core design decisions
 
@@ -93,8 +95,6 @@ Never commit OAuth client secrets, token files, refresh tokens, authorization ca
 ## Main lesson
 
 The difficult part was not the Sheets API call. It was defining where agent autonomy stops.
-
-The troubleshooting rule became:
 
 ```text
 Use intended method

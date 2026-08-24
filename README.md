@@ -1,111 +1,60 @@
 # HammDroid Job Agent
 
-A local-first AI job-search agent built with **Hermes Agent**, a locally served language model, and **Google Sheets** as the job-state layer.
+A local-first job-search automation project using **Hermes Agent**, a locally served language model, and the **Google Sheets API**.
 
-The goal is to automate repetitive discovery and tracking while keeping consequential actions — authentication, security prompts, and application submission — under human control.
+The project is currently focused on proving the local-agent and Sheets integration before expanding into job discovery or application automation.
 
-## Current status
+## Verified so far
 
-### Working
+- local Hermes agent running with a local language model
+- Google OAuth authentication working
+- Google Sheets API connected
+- spreadsheet **create → write → read** round trip successfully tested
+- general Google Drive browsing permission intentionally not granted
 
-- [x] Local agent running through Hermes
-- [x] Google OAuth authentication
-- [x] Google Sheets API integration
-- [x] Create → write → read round-trip validation
+`append` behavior has not been separately validated, so it is not claimed here.
 
-### Designed / in progress
+## Current architecture
 
-- [x] Agent guardrail policy
-- [x] Job workflow architecture
-- [ ] Production job tracker
-- [ ] Scout Mode batch discovery
-- [ ] Human approval queue
-- [ ] One-job-at-a-time Apply Mode
-
-## Architecture
-
-```mermaid
-flowchart LR
-    U[Human] --> H[HammDroid]
-    H --> S[Scout Mode]
-    S --> W[Web Search / Extraction]
-    W --> F[Filter + Fit + Dedupe]
-    F --> G[Google Sheets API]
-    G --> J[(Job Tracker)]
-    J --> U
-    U -->|Approve| A[Apply Mode]
-    A --> B[Application Site]
-    B -->|CAPTCHA / MFA / unknown fact| U
+```text
+Human
+  ↓
+HammDroid / Hermes
+  ↓
+Local language model
+  ↓
+Google Sheets API
 ```
 
-## Documentation
+Google Sheets is intended to hold structured job-search state. Browser automation is a later layer for tasks that genuinely require a web application.
 
-The repo is intentionally small. Each document covers one real part of the system:
+## Planned next work
 
-| Document | Purpose |
-|---|---|
-| [Architecture](docs/architecture.md) | Components, modes, and trust boundary |
-| [Google Sheets Integration](docs/google-sheets-integration.md) | OAuth setup, API enablement, validation, and real errors encountered |
-| [Agent Guardrails](docs/guardrails.md) | Limits on authentication, troubleshooting, and autonomous changes |
-| [Job Workflow](docs/job-workflow.md) | Scout → Sheet → Approval → Apply state model |
+- production job tracker
+- job discovery and deduplication
+- fit classification
+- human approval queue
+- one-job-at-a-time application assistance
 
-## Core design decisions
+Those pieces are planned, not presented as working features.
 
-### API for state, browser for browser work
+## Safety boundaries
 
-Google Sheets is used as a lightweight structured state store for discovered jobs, fit ratings, deduplication, approval status, and application status.
-
-Browser automation is reserved for tasks that genuinely require a browser.
-
-### Human approval stays in the loop
-
-The agent may discover and prepare work autonomously, but it must stop for:
+The agent is designed to stop for:
 
 - CAPTCHA
-- MFA/passkeys
+- MFA/passkeys or other authentication prompts
 - legal attestations
 - assessments
 - unknown factual questions
-- authentication changes
 - application submission
 
-### Truthfulness is a hard rule
+It must not invent employers, experience, dates, clearances, certifications, skills, or application answers. Coursework, labs, homelabs, and portfolio projects must not be represented as professional employment.
 
-Education, certifications, coursework, labs, homelabs, and portfolio projects must never be represented as professional employment experience.
+The agent also should not expand OAuth permissions, modify authentication, install alternate integrations, or change its environment merely because an approved operation failed.
 
-The agent must not invent employers, dates, years of experience, clearances, salaries, certifications, skills, or application answers.
+## Google Sheets integration
 
-## Security model
+The tested OAuth/API setup and the errors encountered while connecting it are documented in [Google Sheets Integration](docs/google-sheets-integration.md).
 
-The tested OAuth setup grants Google Sheets access without general Google Drive browsing permission.
-
-```text
-Google Sheets access      allowed
-General Drive browsing    not granted
-Gmail                     not granted
-Calendar                  not granted
-Contacts                  not granted
-Docs                      not granted
-```
-
-The Sheets OAuth scope is still broader than a single spreadsheet, so the agent also has a behavioral policy restricting normal operation to the designated job tracker.
-
-Never commit OAuth client secrets, token files, refresh tokens, authorization callback URLs, `.env` secrets, browser profiles, or session cookies.
-
-## Main lesson
-
-The difficult part was not the Sheets API call. It was defining where agent autonomy stops.
-
-```text
-Use intended method
-      ↓
-Attempt
-      ↓
-Inspect exact error
-      ↓
-One justified retry
-      ↓
-STOP + report
-```
-
-That boundary made the system safer and much easier to debug.
+No OAuth client secrets, tokens, authorization codes, browser sessions, or other credentials are stored in this repository.

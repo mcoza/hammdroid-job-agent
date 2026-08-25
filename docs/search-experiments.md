@@ -93,12 +93,14 @@ Exact low-years phrase
 → useful when education/experience language is more reliable than title wording
 ```
 
-The current script combines those modes with:
+The current [`../job_finder.py`](../job_finder.py) combines those modes with:
 
 - role-lane terms
 - location terms
 - low-years experience phrases
 - title exclusions such as `-senior -principal -director`
+
+The raw retained results are in [`../examples/search_test_results.csv`](../examples/search_test_results.csv).
 
 ## Takeaway
 
@@ -112,4 +114,4 @@ observed results: different employers expose jobs differently
 current approach: choose a search mode based on what kind of source/qualification evidence I want
 ```
 
-That is why `job_finder_modes_local.py` has separate search modes rather than one increasingly large query string.
+That is why the current helper has separate search modes rather than one increasingly large query string.

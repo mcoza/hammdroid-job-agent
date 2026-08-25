@@ -12,6 +12,9 @@ token.json
 .env.*
 !.env.example
 
+# Local prototype output
+job_finds.csv
+
 # Browser/session artifacts
 cookies.json
 session.json

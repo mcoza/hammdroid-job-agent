@@ -1,208 +1,146 @@
 # HammDroid Job Agent
 
-HammDroid is my local-first job-search agent project.
+HammDroid is a local job-search agent project I have been building piece by piece.
 
-The idea is not to build a giant autonomous system immediately. I want to automate the repetitive parts of job searching while keeping the workflow understandable, inexpensive to run, and under human control when the decision actually matters.
+The goal is to automate the repetitive parts of job searching without turning it into a huge system that I cannot easily follow or troubleshoot. I also want most routine AI work to run locally so I am not paying for an API call every time the agent needs to do something simple.
 
-My approach has been:
+Right now the project is mostly about getting the underlying pieces working together:
 
-```text
-prove one layer
-→ understand how it works
-→ see what problem appears next
-→ add only the next piece I actually need
-```
+- local model serving with Ollama
+- Hermes Agent using the local model
+- Google OAuth
+- Google Sheets API access
+- keeping job-search state somewhere both the agent and I can read
+- setting clear points where the agent has to stop and ask me
 
-This repository documents the pieces I have really configured and tested: the local AI runtime, Hermes Agent integration, Google OAuth/Sheets state, the failures I hit while connecting them, and the design decisions behind the architecture.
+## Why I chose this setup
 
-## Why I am building it this way
+### Local model first
 
-### Local-first instead of cloud-first
+A job-search agent can make a lot of small model calls. Running those locally makes more sense to me for routine work when my computer can already handle it.
 
-A job-search agent can make a lot of routine model calls. I do not want every classification, page review, or orchestration step to consume paid API tokens if my own machine can handle the repetitive work.
+The plan is to use the local model for normal work and leave room for a stronger cloud model later when something is uncertain or worth a second opinion.
 
-The direction I am aiming for is:
+That cloud review path is not built yet.
 
-```text
-routine repetitive work
-→ local model
+### Hermes for the agent layer
 
-uncertain / higher-value review
-→ optional stronger cloud model later
-```
+I did not want to spend the project writing an agent framework from scratch. Hermes already handles the agent and tool side, so I can spend my time on the job-search workflow, integrations, and figuring out where the system needs human input.
 
-That keeps cost down and gives me more visibility into what is running locally.
+I did not build Hermes itself.
 
-### Hermes instead of writing an agent framework
+### Google Sheets for state
 
-My goal is the job-search workflow, not rebuilding agent orchestration from scratch.
+The data I need right now is basic job tracking data such as company, role, status, dates, links, and notes.
 
-Hermes provides the agent/runtime layer so I can focus on:
+Google Sheets is enough for that. The agent can access it through an API and I can still open the same sheet myself and see what is there.
 
-```text
-local inference
-+ tools
-+ persistent state
-+ workflow rules
-+ human approval boundaries
-```
+I considered a database, but I do not have a database-sized problem yet. If the project grows to the point where I need better concurrency, relationships between records, or more complicated history, then a database would make more sense.
 
-I am not claiming that I wrote Hermes itself.
+## Current setup
 
-### Google Sheets instead of a database
-
-The state I need right now is simple and tabular. I want the agent to read/write it through an API, but I also want to be able to open the same state myself and understand it immediately.
-
-So my current reasoning is:
+### Local model path
 
 ```text
-Google Sheets
-→ structured rows/cells
-→ persistent state
-→ API-accessible
-→ directly human-readable/editable
-```
-
-I do not currently need enough concurrency, relational structure, or transactional behavior to justify maintaining a database just because I can.
-
-## Current architecture
-
-The pieces I have proven separately look like this:
-
-```text
-                    LOCAL INFERENCE
-
 Hermes Agent
-    ↓ local provider
+    ↓
 http://localhost:11434/v1
     ↓
 Ollama
     ↓
-local GGUF model
+Ornith 1.5 9B Q4_K_M
     ↓
-GPU
+NVIDIA GPU
+```
 
-                    STRUCTURED STATE
+During setup I configured:
 
+- Ollama model storage at `E:\AI\Models`
+- `hf.co/ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M`
+- Hermes local provider at `http://localhost:11434/v1`
+- local terminal backend
+- a small initial tool set instead of enabling everything at once
+- HammDroid as the Hermes agent name
+
+`ollama ps` showed the model loaded on the GPU during testing.
+
+I also set a large context value in Hermes during setup. I treat that as a setting, not proof that the model can use that entire context effectively in practice.
+
+More detail is in [Local Runtime](docs/local-runtime.md).
+
+### Google Sheets path
+
+```text
 Hermes Agent
     ↓
 Google Workspace helper
     ↓
-OAuth 2.0 token
+OAuth 2.0
     ↓
 Google Sheets API
     ↓
-job-search state
+job-search sheet
 ```
 
-The next step is connecting these proven pieces into the actual constrained job-search workflow rather than adding more infrastructure first.
+I worked through several separate problems while setting this up:
 
-## Local runtime I configured
+- Hermes was looking for the OAuth files in a different path than I first expected
+- Google OAuth returned `403 access_denied` while the app was in testing mode
+- the Sheets API returned `403 SERVICE_DISABLED` before it was enabled in the Google Cloud project
+- a later write returned HTTP 400 because the request format was wrong
 
-The current setup includes:
-
-- Ollama serving a local model on the machine
-- model storage moved to `E:\AI\Models`
-- `hf.co/ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M` used during the setup
-- the loaded model reported by `ollama ps` as running on the GPU
-- Hermes configured to use the local endpoint `http://localhost:11434/v1`
-- local terminal backend
-- minimal initial tool setup rather than enabling everything at once
-- HammDroid used as the Hermes agent name
-
-I configured Hermes with a large context setting during setup, but I treat that as a configuration value rather than claiming a measured effective context length.
-
-See [Local Runtime: Hermes + Ollama](docs/local-runtime.md).
-
-## Google Sheets integration I tested
-
-The Google integration work included:
-
-- Google Desktop OAuth client setup
-- resolving where the Hermes helper actually expected its credential files
-- handling OAuth testing/test-user access
-- reducing unrelated Google Workspace permissions
-- enabling `sheets.googleapis.com`
-- diagnosing `403 access_denied`
-- diagnosing `403 SERVICE_DISABLED`
-- diagnosing an HTTP 400 malformed write request
-- validating a spreadsheet **create → write → read** round trip
-
-The useful part was learning to separate the failure layers:
+After fixing those issues, I tested a small round trip:
 
 ```text
-credential exists but helper cannot find it
-→ path resolution
-
-403 access_denied
-→ OAuth consent / test-user configuration
-
-403 SERVICE_DISABLED
-→ Google Cloud API enablement
-
-HTTP 400 malformed write
-→ request construction
+create spreadsheet
+→ write values
+→ read values back
 ```
 
-`append` behavior has not been separately validated.
+That worked. I have not separately tested append behavior yet.
 
-See [Google Sheets Integration](docs/google-sheets-integration.md).
+More detail is in [Google Sheets Integration](docs/google-sheets-integration.md).
 
-## Human control is part of the design
+## Why I keep human stops in the workflow
 
-I am not trying to make the agent silently answer every application question or submit anything it is unsure about.
+There are parts of an application where I do not want the agent guessing or acting on its own.
 
-The intended workflow stops for:
+The plan is to stop for:
 
 - CAPTCHA
-- MFA/passkeys
+- MFA or passkeys
 - legal attestations
 - assessments
 - factual questions the system cannot verify
 - final application submission
 
-The system also must not invent employers, dates, experience, clearances, certifications, skills, or application answers.
+It also cannot invent employers, dates, experience, clearances, certifications, skills, or application answers.
 
-That is both a safety boundary and a data-integrity boundary.
+## What I have actually tested
 
-## What this project currently demonstrates
-
-| Area | Hands-on work represented |
-|---|---|
-| **Local AI runtime** | Ollama model storage/runtime, GPU-backed local inference, local model endpoint |
-| **Agent integration** | Hermes local-provider configuration, local terminal/tool baseline, runtime separation from model serving |
-| **OAuth 2.0** | Desktop client setup, test-user troubleshooting, local credential/token handling |
-| **Google Sheets API** | API activation, authenticated create/write/read validation, request-format troubleshooting |
-| **Integration troubleshooting** | separating path, authentication, service-enable, and request-format failures |
-| **Architecture decisions** | local-first inference, Sheets instead of premature database infrastructure, API state instead of UI-driven spreadsheet editing |
-| **Control boundaries** | explicit human stops for consequential or unverifiable application actions |
-
-## Current boundary
-
-### Configured / tested
-
-- local Ollama inference path
-- Hermes connected to the local model endpoint
-- model loading on GPU
-- local model storage configuration
+- Ollama serving a local model
+- model files stored on a separate drive
+- model loaded on the GPU
+- Hermes connected to the Ollama endpoint
+- local Hermes terminal setup
 - Google Desktop OAuth setup
-- Hermes credential-path troubleshooting
-- Sheets API activation
-- create/write/read spreadsheet validation
-- repository secret exclusions
+- Hermes credential path troubleshooting
+- Google Sheets API activation
+- spreadsheet create, write, and read test
+- keeping OAuth secrets and local runtime files out of Git
 
-### Not claimed as complete
+## What is not finished
 
 - automatic job discovery
 - job-page parsing
 - deduplication
-- job-fit classification benchmarks
+- tested job-fit scoring
 - browser-driven application completion
-- multi-model judge/reviewer architecture
-- automated local-to-cloud escalation
+- multi-model review setup
+- automatic local-to-cloud escalation
 - autonomous application submission
 
-## Repository structure
+## Repo layout
 
 ```text
 README.md
@@ -213,6 +151,6 @@ docs/
   google-sheets-integration.md
 ```
 
-Start with [Design Decisions and Why I Made Them](docs/design-decisions.md) for the reasoning behind the project.
+[Design Decisions](docs/design-decisions.md) has more detail on why I made these choices.
 
-No OAuth client secrets, tokens, authorization codes, browser sessions, or local Hermes credential state are stored in this repository.
+No OAuth client secrets, tokens, authorization codes, browser sessions, or local Hermes credential files are stored in this repo.

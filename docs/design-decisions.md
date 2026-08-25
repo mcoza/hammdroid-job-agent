@@ -22,7 +22,7 @@ The cloud review part is still an idea, not a finished feature.
 
 Local inference also makes the setup easier for me to inspect. I can check which model is loaded, whether it is using the GPU, where the files are stored, and which endpoint Hermes is calling.
 
-## Use Hermes instead of building an agent framework
+## Hermes instead of building an agent framework
 
 The part I care about is the job-search workflow. I do not need to build tool routing and agent plumbing from scratch just to get there.
 
@@ -57,13 +57,13 @@ I moved the model files to `E:\AI\Models` because they are large and I did not w
 
 ## Start with one model
 
-I looked at the idea of using several models for different jobs, such as one model doing the work and another reviewing it.
+I looked into the idea of using several models for different jobs, such as one model doing the work and another reviewing it.
 
-I decided not to start there. More models means more memory use, more waiting, more routing logic, and more things to troubleshoot.
+I decided not to start there. More models means more memory use, more waiting, more routing logic, and overall more troubleshooting.
 
-For now I would rather get one model working through the full workflow first. If I find a real weakness that another model would help with, then I can add one for a reason.
+For now, I would rather get one model working through the full workflow first. If I find a real weakness that another model would help with, then I can add one for a reason.
 
-## Use Google Sheets instead of a database
+## Google Sheets over a database
 
 The state I need right now is simple. It is mostly rows of job information such as company, role, status, dates, links, and notes.
 
@@ -76,7 +76,7 @@ Sheets gives me:
 
 That is enough for the current stage.
 
-If I later need stronger querying, relationships between records, several things writing at once, or better history, then moving to a database would make sense.
+If I need stronger querying, relationships between records, several things writing at once, or better history, then moving to a database would be beneficial.
 
 ## Use the Sheets API instead of clicking through the site
 

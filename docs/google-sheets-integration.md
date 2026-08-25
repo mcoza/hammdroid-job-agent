@@ -1,63 +1,143 @@
 # Google Sheets Integration
 
-This documents the **tested** Google Sheets integration for HammDroid: OAuth authentication, API activation, and a small create/write/read validation.
+This documents the Google Sheets integration tested for HammDroid: Desktop OAuth setup, Hermes credential-file handling, API activation, request troubleshooting, and a small spreadsheet create/write/read validation.
 
-## Why Sheets
+The goal is to use Sheets as a structured state layer that both a human and the agent can inspect, rather than automating spreadsheet edits through browser clicks.
 
-Google Sheets is being used as a lightweight structured state layer for job-search data instead of driving the spreadsheet through browser automation.
+## Component path
 
 ```text
-Hermes / HammDroid
-        ↓
+Hermes workflow
+      ↓
+Google Workspace skill/helper
+      ↓
+OAuth 2.0 credentials + stored token
+      ↓
 Google Sheets API
-        ↓
-structured job state
+      ↓
+spreadsheet state
 ```
 
-## Tested result
+The repository does not contain Google credentials or tokens. It documents how the integration behaved and what was tested.
 
-The end-to-end validation was intentionally small:
+## Credential and token files
 
-1. create a temporary spreadsheet
-2. write known values
-3. read the same values back
-
-The create → write → read test succeeded after the Sheets API was enabled.
-
-`append` behavior has **not** been separately validated.
-
-## OAuth scope
-
-The tested setup grants Google Sheets access without general Google Drive browsing access.
+The Hermes Google Workspace helper uses logical files under the Hermes home directory:
 
 ```text
-Google Sheets access      allowed
-General Drive browsing    not granted
-Gmail                     not granted
-Calendar                  not granted
-Contacts                  not granted
-Docs                       not granted
+google_client_secret.json  → OAuth Desktop client configuration
+google_oauth_pending.json  → temporary authorization-flow state
+google_token.json          → token / refresh-token state after authorization
 ```
 
-The Sheets scope is broader than one spreadsheet, so normal agent behavior is still restricted to the intended job tracker.
+The project `.gitignore` excludes all of these names.
 
-## Problems encountered
+The tested OAuth client was a Google **Desktop / installed application** client rather than a web-application client.
 
-### OAuth test-user access
+## OAuth flow
 
-An early authorization attempt returned `403 access_denied` while the OAuth app was in testing mode.
+The practical flow was:
 
-The authorizing account needed to be listed as a test user.
+```text
+Desktop client JSON
+      ↓
+Hermes setup helper generates authorization request
+      ↓
+Google consent screen
+      ↓
+localhost callback / authorization response
+      ↓
+token exchange
+      ↓
+google_token.json
+      ↓
+authenticated API requests
+```
 
-### Localhost callback
+A browser error at the localhost callback did not automatically mean the OAuth flow failed. The callback URL could still contain the authorization response expected by the helper.
 
-The Desktop OAuth flow redirected to localhost. A browser page failing to load did not necessarily mean authorization had failed; the callback URL still contained the authorization response needed by the OAuth helper.
+Authorization codes and callback URLs containing codes are treated as credentials and are not stored in this repository.
 
-Authorization codes and callback URLs containing codes are not stored in this repository.
+## Scope work
 
-### Sheets API disabled
+The stock Google Workspace skill exposed broader Google Workspace scopes than HammDroid needed. The setup work narrowed the target to Sheets plus read-only Drive access rather than Gmail, Calendar, Contacts, Docs, or full Drive access.
 
-The first spreadsheet-create request returned:
+The intended reduced set was:
+
+```text
+https://www.googleapis.com/auth/spreadsheets
+https://www.googleapis.com/auth/drive.readonly
+```
+
+Important distinction:
+
+```text
+spreadsheets   → read/write spreadsheet contents through the Sheets API
+drive.readonly → read-only Drive access; this is still broader than one spreadsheet
+```
+
+So this repository does **not** claim that there is zero general Drive visibility. `drive.readonly` is a read-only Drive scope. The operational workflow is still intended to stay on the designated job-tracking sheet.
+
+Gmail, Calendar, Contacts, and Docs scopes were intentionally excluded from the reduced configuration.
+
+## Tested spreadsheet round trip
+
+The smallest useful integration test was:
+
+```text
+create temporary spreadsheet
+        ↓
+write known values
+        ↓
+read values back
+        ↓
+compare returned state with expected state
+```
+
+The create → write → read round trip is documented as successful after the Sheets API was enabled.
+
+`append` has **not** been separately validated, so the repository does not claim append behavior as completed functionality.
+
+## Failure 1: OAuth app in testing mode
+
+An early authorization attempt returned:
+
+```text
+HTTP 403
+access_denied
+```
+
+The OAuth consent configuration was still in testing mode, and the account performing the authorization had to be added as a test user.
+
+The useful diagnostic distinction was:
+
+```text
+OAuth consent denied before token issuance
+→ inspect OAuth app/test-user configuration
+```
+
+rather than changing spreadsheet request code.
+
+## Failure 2: credential path resolution
+
+The Google Workspace helper resolves credential files from the Hermes home directory. During setup, the client-secret JSON initially existed in the HammDroid project directory while the helper was looking under its Hermes credential directory.
+
+That produced a path/state problem rather than a bad OAuth client.
+
+The troubleshooting question became:
+
+```text
+credential file exists somewhere
+≠ helper is reading that location
+```
+
+The fix was to place the client configuration where the helper actually resolves `google_client_secret.json`.
+
+This is one reason credentials are kept outside the Git repository: runtime secret storage and source-code storage are separate concerns.
+
+## Failure 3: Sheets API disabled
+
+The first spreadsheet-create attempt returned:
 
 ```text
 HTTP 403
@@ -65,37 +145,84 @@ SERVICE_DISABLED
 service=sheets.googleapis.com
 ```
 
-That showed authentication was working but the Google Sheets API itself was disabled for the Cloud project. Enabling the API fixed that issue without changing OAuth scopes.
+That identified the failing layer as the Google Cloud project's service configuration. The request reached Google, but the Sheets API was not enabled for the project.
 
-### Malformed write request
-
-A later write returned HTTP 400 because the requested range/value shape was malformed. That was a request-format issue rather than an authentication problem.
-
-## Troubleshooting lesson
-
-These failures were useful because they occurred at different layers:
+Enabling `sheets.googleapis.com` resolved this layer without redesigning the OAuth flow.
 
 ```text
-OAuth authorization
+OAuth/client setup
       ↓
-API enabled/disabled state
+request reaches Google API
       ↓
-request formatting
+SERVICE_DISABLED
       ↓
-spreadsheet operation
+enable Sheets API in the Cloud project
 ```
 
-Treating every failure as an authentication problem would have led to unnecessary reconfiguration.
+## Failure 4: malformed write request
 
-## Security
+A later write attempt returned HTTP 400 because the requested range/value shape was malformed.
 
-Do not commit:
+That is a different class of failure from OAuth or API activation:
 
-- OAuth client JSON files
-- token or refresh-token files
+```text
+400 malformed request
+→ inspect range / request-body shape
+
+403 access_denied
+→ inspect authorization/consent
+
+403 SERVICE_DISABLED
+→ inspect Cloud API enablement
+```
+
+This distinction matters because repeatedly reauthorizing OAuth would not fix a malformed Sheets request.
+
+## Troubleshooting model from the integration
+
+The setup became easier once the integration was treated as layers:
+
+```text
+1. credential discovery
+2. OAuth consent / token acquisition
+3. OAuth scopes
+4. Google Cloud API enablement
+5. request construction
+6. spreadsheet operation
+7. returned spreadsheet state
+```
+
+A failure at one layer should be investigated there before reconfiguring layers that have already been demonstrated to work.
+
+## Security controls used in the repo
+
+The repository excludes:
+
+- OAuth client-secret JSON files
+- token and refresh-token files
+- pending OAuth state files
 - authorization codes
 - callback URLs containing codes
-- `.env` secrets
+- `.env` files
 - browser profiles/session cookies
 
-This repository documents the integration behavior, not the credentials used to authorize it.
+The `.gitignore` is part of the project design because credential handling is an integration concern, not just a documentation note.
+
+## Current boundary
+
+Validated or documented as working:
+
+- Desktop OAuth client setup
+- token-based Google API access
+- Sheets API activation
+- create/write/read spreadsheet round trip
+- failure isolation across OAuth, service-enable, and request-format layers
+
+Not yet claimed:
+
+- append validation
+- schema migration/versioning
+- concurrency handling
+- duplicate detection
+- automated job discovery
+- automated application submission

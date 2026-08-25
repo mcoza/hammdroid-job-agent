@@ -1,217 +1,214 @@
 # Design Decisions and Why I Made Them
 
-HammDroid started from a practical problem: job searching was repetitive, fragmented across ATS platforms and company career sites, and especially noisy for early-career cybersecurity roles.
+HammDroid is not a finished autonomous job-application system. It is a project I am building in layers so I can understand, test, and justify each part before adding the next one.
 
-I did not want to begin by building a large autonomous system and then hope it worked. My approach has been to prove each layer with the smallest useful version first, keep the parts I can inspect, and only add complexity when the earlier version shows why I need it.
-
-## 1. Prove the search logic before adding an agent
-
-My first question was not "how do I make an AI apply to jobs?"
-
-It was:
+My main concern has been avoiding two bad extremes:
 
 ```text
-Can I create repeatable searches that find the kinds of roles I actually want?
+manual everything
+→ repetitive and hard to scale
+
+fully autonomous black box
+→ difficult to trust, debug, or control
 ```
 
-That led to a local Python CLI that combines:
+The design I am aiming for sits between those: automate repetitive work, keep the state visible, and stop for the human when the decision is consequential or uncertain.
+
+## 1. Local-first instead of cloud-first
+
+A job-search agent can generate a large amount of routine model traffic. If every page read, comparison, classification, or tool decision goes through a paid API, cost becomes part of every iteration.
+
+I already have hardware capable of running useful local models, so my first design choice was:
 
 ```text
-company
-+ role lane
-+ experience phrases
-+ location terms
-+ site filters
+routine inference
+→ local model
+
+stronger review when it is actually useful
+→ optional cloud model later
 ```
 
-into a search query and opens it in the browser.
+This is partly about cost, but also about control. With a local runtime I can inspect which model is loaded, how much GPU memory it uses, where the model files live, and which endpoint the agent is calling.
 
-I kept the search lanes explicit because the terms that surface a GRC role are different from the terms that surface RMF, SOC, IT support, or vendor-risk work.
+I do not need the local model to be the best model available. I need it to be good enough for the repetitive portion of the workflow, with a clear way to escalate uncertain cases later if needed.
 
-The original prototype is in [`../prototype/job_finder_poc.py`](../prototype/job_finder_poc.py).
+## 2. Use Hermes as the agent runtime instead of writing one from scratch
 
-## 2. I changed the search strategy because the first one was too narrow
+I considered the difference between building the job-search workflow and building an entire agent framework.
 
-The first prototype emphasized common ATS domains such as Workday, Greenhouse, Lever, iCIMS, Taleo, and SmartRecruiters.
+Those are not the same project.
 
-Testing showed that this worked, but it was not enough. For defense contractors in particular, company career pages and exact qualification phrases sometimes surfaced better low-years results than a strict ATS-only search.
-
-That is why the next version added three modes:
+Hermes already provides the orchestration layer, so I can focus on:
 
 ```text
-1. Strict ATS-only
-2. Broad career sites
-3. Exact low-years phrase search
+local model connection
++ tool access
++ workflow behavior
++ structured state
++ human approval boundaries
 ```
 
-The mode split was not added just to make the script more complicated. It came from comparing search results and seeing that one search pattern did not cover every employer well.
+rather than rebuilding tool dispatch, conversation state, and agent plumbing.
 
-That mode-based version is now the repository's current [`../job_finder.py`](../job_finder.py). The experiment trail is documented in [`search-experiments.md`](search-experiments.md).
+That means HammDroid is primarily an **integration and workflow project**. I am not claiming that I wrote Hermes itself.
 
-## 3. Keep a human in the review loop
+## 3. Use Ollama as the local model service
 
-The helper intentionally opens the search and lets me review the result before saving it.
+I wanted the agent runtime and the model runtime separated cleanly.
 
-That is because a search result can look promising while still being wrong for the actual target.
-
-Examples from the search experiments included:
-
-- a title containing `Principal` even though the snippet also contained lower-level qualification language
-- a role that matched the experience requirement but was in the wrong location
-- a broad career category page rather than an actual job posting
-- a senior role that matched the topic but required far too much experience
-
-So I did not want the first version making automatic "apply" decisions from title or snippet matches.
-
-The local flow is deliberately:
+The path I configured is:
 
 ```text
-search
-→ human review
-→ record the result
+Hermes
+→ local provider endpoint
+→ Ollama
+→ local GGUF model
+→ GPU
 ```
 
-rather than:
+This separation is useful because Hermes does not need to know how the model is stored or executed internally. It only needs a compatible endpoint.
+
+Likewise, I can change the local model later without redesigning the entire workflow.
+
+I also moved the model storage to a dedicated drive because model files are large and do not need to live on the primary Windows volume.
+
+## 4. Start with one model instead of a model committee
+
+I explored the idea of multiple local models acting as judge/reviewer/executor roles.
+
+That could be useful eventually, but it also adds:
+
+- more VRAM/RAM pressure
+- more inference time
+- routing logic
+- more failure paths
+- more questions about which model should override which
+
+I decided that was backwards for the current stage.
+
+My rule is:
 
 ```text
-search
-→ assume match
-→ apply
+prove one-model workflow
+→ observe actual weaknesses
+→ add another model only if it solves a measured problem
 ```
 
-## 4. Start with CSV because the state model was simple
+I would rather have one understandable pipeline that works than three models whose interaction I cannot yet justify.
 
-The first state store is a CSV with an explicit schema:
+## 5. Google Sheets instead of a database
+
+The job-search state I need right now is fundamentally tabular: jobs, companies, status, notes, dates, and related fields.
+
+I considered whether I needed a database and decided I did not yet.
+
+A database would give stronger querying, relations, concurrency, and transaction behavior, but it would also add infrastructure and maintenance before those are real requirements.
+
+Google Sheets gives me something useful for this stage:
 
 ```text
-role
-company
-lane
-site_found
-years_expected
-posted_date
-date_found
-url
-status
-notes
+structured rows/cells
++ persistent cloud state
++ API access
++ direct human visibility
++ manual correction when needed
 ```
 
-I chose CSV because I needed to prove the record structure and workflow, not build infrastructure.
+That last part matters. I do not want the agent's state hidden in a system I have to query just to see what it thinks happened.
 
-At that stage, a database would have added setup and maintenance without solving a problem I actually had yet.
+If the workflow later grows enough that Sheets becomes the bottleneck, that will be evidence for moving to a database. I do not want to add one just because agent projects often have one.
 
-The useful question was:
+## 6. API access for state instead of browser-driving the spreadsheet
 
-```text
-Can I reliably capture the fields I care about?
-```
+If HammDroid needs to update a spreadsheet, I would rather have it call the Google Sheets API than automate mouse clicks and cell editing through the browser.
 
-Once the answer was yes, I had a concrete state model that could move somewhere else later.
-
-## 5. Move toward Google Sheets instead of adding a database
-
-When I started connecting the workflow to Hermes Agent, I wanted state that was:
-
-- structured
-- persistent
-- easy for an agent to read/write through an API
-- easy for me to inspect and edit directly
-- simple enough that I was not maintaining a database server just to track job rows
-
-Google Sheets fits that stage of the project better than a database.
-
-My reasoning is:
-
-```text
-CSV
-→ proves the schema locally
-→ but is tied to a local script/file
-
-Google Sheets
-→ keeps the table model
-→ adds API access
-→ remains directly human-readable/editable
-```
-
-I am not treating Sheets as a production database. If the project later needs concurrency control, relational joins, large-scale history, or stronger transactional guarantees, that would be evidence for moving to a real database. I do not need that complexity yet.
-
-## 6. Use an API for state instead of automating spreadsheet clicks
-
-If the agent needs to read or update structured state, I would rather call the Sheets API than make the browser click cells.
-
-The API gives a clearer boundary:
+The API path is clearer:
 
 ```text
 agent
-→ authenticated request
-→ spreadsheet range/value operation
+→ OAuth token
+→ Sheets API request
+→ range/value operation
 → returned state
 ```
 
-That is easier to reason about and troubleshoot than UI automation for a spreadsheet.
+This gives me identifiable failure layers and structured responses.
 
-It is also why the OAuth/Sheets troubleshooting matters in this project. The integration has distinct layers: credential discovery, authorization, scopes, API enablement, request formatting, and spreadsheet state.
+The OAuth/Sheets setup already proved why this matters: I hit separate failures in credential discovery, OAuth access, Google Cloud service enablement, and request formatting. Those would have been harder to isolate if the spreadsheet itself were being controlled through UI automation.
 
-## 7. Keep routine work local when possible
+## 7. Keep credentials outside the repository
 
-A major design goal is to avoid making every search, classification, or reasoning step depend on paid cloud-model tokens.
+Hermes needs OAuth client/token material locally, but those files do not belong in Git.
 
-The direction I am aiming for is local-first:
+The separation I want is:
 
 ```text
-routine search/orchestration/classification
-→ local agent/model where practical
+repository
+→ documentation and non-secret project material
 
-important or uncertain decision
-→ optional stronger cloud-model review/check
+local Hermes home
+→ OAuth client configuration
+→ tokens / refresh state
+→ runtime-specific local state
 ```
 
-That is a design direction, not a claim that the full local/cloud review pipeline is finished today.
+That is why `.gitignore` excludes the relevant credentials, token files, environment files, browser sessions, and `.hermes` state.
 
-The reason is cost and control. If the agent is doing repetitive job-search work, I do not want every small step to require a metered API call when my own machine can handle routine work.
+## 8. Human approval is part of the architecture
 
-I still see value in a stronger cloud model as an occasional reviewer, especially for ambiguous job-fit or workflow decisions. I just do not want it to be the mandatory engine for every operation.
+The goal is not to remove myself from the process entirely.
 
-## 8. Keep consequential application actions human-controlled
-
-The project can automate searching, organizing, and eventually some form-filling assistance, but there are points where I want an explicit stop.
-
-The intended boundaries include:
+There are actions where the agent can assist but should stop before making the final decision:
 
 - CAPTCHA
 - MFA/passkeys
 - legal attestations
 - assessments
-- factual questions the system cannot verify
+- questions whose factual answer is not known
 - final application submission
 
-The same rule applies to resume/application facts: the system must not invent experience, dates, employers, clearances, certifications, or skills.
+The same applies to resume/application content. The agent cannot invent employment, dates, clearances, certifications, skills, or experience.
 
-This is not only a safety rule. It is also a data-quality rule. A job-search agent is not useful if it creates false application state.
+I think of this as both a safety boundary and a state-integrity boundary. Once bad information enters an automated workflow, it can propagate quickly.
 
-## 9. Build the system in layers I can debug
+## 9. Build in layers I can troubleshoot
 
-The project has gradually become this:
+The architecture I am aiming for is intentionally separable:
 
 ```text
-search construction
-      ↓
-manual result review
-      ↓
-structured state
+local inference
       ↓
 agent runtime
       ↓
-OAuth / API integration
+tools / browser interaction
       ↓
-future automation
+structured state API
+      ↓
+human approval when required
 ```
 
-That order is intentional.
+Each layer should be testable on its own.
 
-If a search is bad, I can change the search logic.
-If the state model is bad, I can change the schema.
-If OAuth fails, I can debug OAuth without rewriting the search logic.
-If an API request is malformed, I can fix the request without assuming authentication is broken.
+For example:
 
-The project is useful to me because each layer has a reason to exist and a failure mode I can inspect.
+```text
+model does not answer
+→ inspect Ollama / model / endpoint
+
+Hermes cannot use local model
+→ inspect provider configuration
+
+Google helper cannot authenticate
+→ inspect credential path / OAuth
+
+OAuth succeeds but Sheets call fails
+→ inspect API enablement / request shape
+```
+
+That is the main architectural principle behind HammDroid: add capabilities in a way that still lets me identify which component is failing.
+
+## Current direction
+
+The project is now at the point where the local runtime and the Google Sheets state integration have both been proven separately.
+
+The next meaningful work is not adding more infrastructure. It is connecting those proven pieces into a constrained job-search workflow and testing where the local model is actually good enough versus where human or stronger-model review is needed.

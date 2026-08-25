@@ -64,7 +64,7 @@ role, company, lane, site_found, years_expected,
 posted_date, date_found, url, status, notes
 ```
 
-The original simpler proof of concept is retained in [`prototype/job_finder_poc.py`](prototype/job_finder_poc.py), and the later mode-based version is retained in [`prototype/job_finder_modes_local.py`](prototype/job_finder_modes_local.py).
+The original simpler proof of concept is retained in [`prototype/job_finder_poc.py`](prototype/job_finder_poc.py). The current root-level helper is the later mode-based iteration that grew out of that POC and the search experiments.
 
 Run the current helper with:
 
@@ -255,11 +255,10 @@ That is both a safety boundary and a data-integrity boundary.
 ## Repository map
 
 ```text
-job_finder.py                 current local helper
+job_finder.py                 current mode-based local helper
 
 prototype/
   job_finder_poc.py           original simpler POC
-  job_finder_modes_local.py   mode-based iteration
 
 examples/
   job_finds_poc.csv           initial record shape

@@ -1,118 +1,94 @@
 # Google Sheets Integration
 
-The reason I added Google Sheets was not "because agent projects need a database." It was the opposite: I wanted persistent structured state without adding a database before I had a database-sized problem.
+I added Google Sheets because I needed somewhere simple to keep job-search state that both HammDroid and I could access.
 
-Sheets gives HammDroid a table the agent can access through an API while I can still open it directly and see or correct the same state.
+I did not want to add a database before I actually needed one. Sheets gives me rows and columns, API access, and a UI I can open myself if I want to check or fix something.
 
-## Architecture
-
-The integration path I configured is:
+## Setup
 
 ```text
 Hermes Agent
     ↓
 Google Workspace helper
     ↓
-OAuth 2.0 credentials / token
+OAuth 2.0
     ↓
 Google Sheets API
     ↓
-spreadsheet state
+spreadsheet
 ```
 
-The Google API integration is separate from the local LLM runtime. Ollama/Hermes can be working while Google authentication is broken, and Google authentication can be working while a Sheets request is malformed.
+The Google side is separate from the local model side. Ollama can be working while Google authentication is broken, and Google authentication can be working while the Sheets request itself is wrong.
 
-That separation became important during troubleshooting.
+That ended up mattering while I was troubleshooting it.
 
-## Credential location
+## Credential path
 
-The OAuth client file originally existed in the project area, but the Hermes helper was resolving credentials from the Hermes home directory instead.
+At first the OAuth client file existed on the machine, but Hermes was not looking in the place where I had put it.
 
-The logical location used by the helper was:
+The helper expected the file under the Hermes home directory:
 
 ```text
 %USERPROFILE%\.hermes\google_client_secret.json
 ```
 
-Token/pending-auth state was also handled under the local Hermes home rather than committed to the repository.
+That was a path problem, not a bad OAuth client.
 
-The useful distinction was:
+The useful lesson was simple: a file existing somewhere does not mean the program is reading that location.
 
-```text
-credential file exists
-≠
-application is reading that path
-```
+OAuth tokens and pending authorization files also stay under the local Hermes setup instead of going into Git.
 
-So the troubleshooting step was to identify where the helper actually resolves its credential files before changing the OAuth client itself.
+## OAuth client
 
-## OAuth client type
+I used a Google Desktop OAuth client.
 
-I used a Google **Desktop / installed application** OAuth client.
-
-The flow is conceptually:
+The basic flow was:
 
 ```text
-client configuration
-      ↓
-authorization request
-      ↓
-Google consent screen
-      ↓
-localhost callback / authorization response
-      ↓
-token exchange
-      ↓
-stored token
-      ↓
-authenticated Google API call
+client config
+→ Google sign-in and consent
+→ localhost callback
+→ token exchange
+→ stored token
+→ Google API request
 ```
 
-A localhost browser error was not automatically proof that authorization had failed. What mattered was whether the authorization response had been returned in a form the helper could consume.
+A browser error on the localhost callback did not automatically mean the whole authorization failed. What mattered was whether the helper received the authorization response it needed.
 
-Authorization codes and callback URLs containing codes are treated as credentials and are not stored in this repository.
+Authorization codes and callback URLs containing codes are not kept in the repo.
 
-## Scope decision
+## Permissions
 
-I did not want HammDroid requesting unrelated Gmail, Calendar, Contacts, or Docs permissions just because the Google Workspace tooling could support them.
+I did not want HammDroid asking for Gmail, Calendar, Contacts, or Docs permissions when this part of the project only needed spreadsheet access.
 
-The reduced scope direction used for this workflow was:
+The reduced scope direction used here was:
 
 ```text
 https://www.googleapis.com/auth/spreadsheets
 https://www.googleapis.com/auth/drive.readonly
 ```
 
-That means:
+`spreadsheets` allows spreadsheet read and write access.
 
-```text
-spreadsheets   → read/write spreadsheet content
-drive.readonly → read-only Drive access
-```
+`drive.readonly` is still general read-only Drive access, so I do not describe the setup as having no Drive access. The workflow is meant to stay on the job-tracking sheet even though the scope itself is broader than one file.
 
-`drive.readonly` is still broader than access to one spreadsheet, so I do not describe this as "no Drive access." The workflow is intended to operate on the designated job-tracking sheet even though the OAuth scope itself permits read-only Drive visibility.
+## Problems I hit
 
-## Failure 1 — OAuth `403 access_denied`
+### OAuth access denied
 
-An early authorization attempt returned:
+One authorization attempt returned:
 
 ```text
 403 access_denied
 ```
 
-The OAuth app was still in testing mode and the account performing authorization needed to be included as a test user.
+The OAuth app was still in testing mode and the account needed to be added as a test user.
 
-That placed the failure here:
+That was an OAuth setup issue, not a Sheets request problem.
 
-```text
-OAuth consent/test-user configuration
-```
+### Sheets API disabled
 
-not in the Sheets request code.
-
-## Failure 2 — Sheets API not enabled
-
-After OAuth was working, a spreadsheet request returned:
+After OAuth was working, a request returned:
 
 ```text
 HTTP 403
@@ -120,105 +96,89 @@ SERVICE_DISABLED
 service=sheets.googleapis.com
 ```
 
-That was useful evidence because it meant the request had progressed farther than the earlier OAuth failure.
+The Google Cloud project did not have the Sheets API enabled yet.
 
-The failing layer was now:
+Enabling `sheets.googleapis.com` fixed that part without changing the OAuth setup.
 
-```text
-Google Cloud project
-→ Sheets API service enablement
-```
+### Bad write request
 
-Enabling `sheets.googleapis.com` corrected that layer without rebuilding the OAuth setup.
+A later write returned HTTP 400 because the range and value request was formatted incorrectly.
 
-## Failure 3 — malformed write request
+At that point authentication was already working. The problem was the request itself.
 
-A later write failed with HTTP 400 because the range/value request shape was malformed.
-
-Again, that was a different subsystem:
-
-```text
-HTTP 400
-→ request construction / range-value shape
-```
-
-Reauthorizing OAuth would not have fixed it.
-
-This gave me a useful failure map:
+The errors ended up mapping pretty cleanly:
 
 ```text
 403 access_denied
-→ authorization / consent
+→ OAuth setup
 
 403 SERVICE_DISABLED
-→ Cloud API enablement
+→ Google Cloud API setting
 
-400 malformed request
-→ request formatting
+HTTP 400
+→ bad request format
 ```
 
-## Validation
+## What I tested
 
-The small end-to-end test was deliberately limited:
+The final test was small on purpose:
 
 ```text
 create spreadsheet
 → write known values
-→ read values back
+→ read the values back
 ```
 
-That create → write → read path succeeded after the earlier integration problems were corrected.
+That worked after the earlier problems were fixed.
 
-This was enough to prove that Hermes could use authenticated Google API access as a state path for the project.
+It was enough to prove that HammDroid could use authenticated Google Sheets access for state.
 
-`append` behavior was **not separately validated**, so I do not claim it as tested functionality.
+I have not separately tested append behavior yet.
 
-## Why API state instead of spreadsheet browser automation
+## Why I use the API instead of browser clicks
 
-I would rather have HammDroid update state through an API than click through the Google Sheets UI.
+If HammDroid needs to update the sheet, the API is easier for me to follow than automating clicks in the Google Sheets website.
 
-With the API, I can reason about:
+With the API I can check:
 
-```text
-authentication
-→ scope
-→ service availability
-→ request body/range
-→ returned data
-```
+- whether OAuth worked
+- which permissions were granted
+- whether the API is enabled
+- whether the request is valid
+- what data came back
 
-Those are inspectable technical boundaries. Browser-driving spreadsheet cells would add UI state, selectors, timing, and rendering failures to a problem that already has a structured API.
+Browser automation would add selectors, page state, timing, and rendering problems to something that already has an API.
 
-## Security boundary
+## Secrets and local files
 
-The repository excludes local runtime credentials and session state, including:
+The repo does not store:
 
-- OAuth client-secret JSON
-- access/refresh token files
+- OAuth client-secret files
+- access or refresh tokens
 - pending OAuth state
 - authorization codes
 - `.env` files
-- browser profile/session artifacts
+- browser sessions
 - local Hermes state
 
-The source repository documents the integration. It is not the credential store.
+Those files stay local and are covered by `.gitignore`.
 
 ## Current status
 
-Validated/configured:
+Tested or configured:
 
-- Google Desktop OAuth client flow
-- Hermes credential-path resolution
-- OAuth test-user issue identified
-- Sheets API service enabled
-- malformed write request isolated from authentication
-- spreadsheet create → write → read round trip
+- Google Desktop OAuth client
+- Hermes credential path
+- OAuth test-user fix
+- Sheets API enabled
+- malformed write request identified and fixed
+- spreadsheet create, write, and read test
 
-Not claimed as complete:
+Not finished:
 
-- append validation
-- production schema/versioning
-- deduplication logic
-- concurrent writers
-- end-to-end job ingestion
-- autonomous application workflow
+- append testing
+- final job-tracking sheet design
+- deduplication
+- multiple writers
+- automatic job ingestion
+- full application workflow

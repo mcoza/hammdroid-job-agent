@@ -1,214 +1,143 @@
-# Design Decisions and Why I Made Them
+# Design Decisions
 
-HammDroid is not a finished autonomous job-application system. It is a project I am building in layers so I can understand, test, and justify each part before adding the next one.
+This is the reasoning behind the current HammDroid setup.
 
-My main concern has been avoiding two bad extremes:
+I am building it in small pieces because I want to understand what each part is doing before I add more moving parts.
 
-```text
-manual everything
-→ repetitive and hard to scale
+## Run routine AI work locally
 
-fully autonomous black box
-→ difficult to trust, debug, or control
-```
+A job-search agent can make a lot of small model calls. I already have a computer that can run a useful local model, so it makes sense to use that for routine work instead of sending everything to a paid API.
 
-The design I am aiming for sits between those: automate repetitive work, keep the state visible, and stop for the human when the decision is consequential or uncertain.
-
-## 1. Local-first instead of cloud-first
-
-A job-search agent can generate a large amount of routine model traffic. If every page read, comparison, classification, or tool decision goes through a paid API, cost becomes part of every iteration.
-
-I already have hardware capable of running useful local models, so my first design choice was:
+My current idea is:
 
 ```text
-routine inference
+normal repetitive work
 → local model
 
-stronger review when it is actually useful
-→ optional cloud model later
+uncertain or important review
+→ stronger cloud model later if needed
 ```
 
-This is partly about cost, but also about control. With a local runtime I can inspect which model is loaded, how much GPU memory it uses, where the model files live, and which endpoint the agent is calling.
+The cloud review part is still an idea, not a finished feature.
 
-I do not need the local model to be the best model available. I need it to be good enough for the repetitive portion of the workflow, with a clear way to escalate uncertain cases later if needed.
+Local inference also makes the setup easier for me to inspect. I can check which model is loaded, whether it is using the GPU, where the files are stored, and which endpoint Hermes is calling.
 
-## 2. Use Hermes as the agent runtime instead of writing one from scratch
+## Use Hermes instead of building an agent framework
 
-I considered the difference between building the job-search workflow and building an entire agent framework.
+The part I care about is the job-search workflow. I do not need to build tool routing and agent plumbing from scratch just to get there.
 
-Those are not the same project.
+Hermes already provides the agent layer. That lets me focus on things such as:
 
-Hermes already provides the orchestration layer, so I can focus on:
+- connecting the local model
+- choosing which tools the agent gets
+- connecting Google Sheets
+- deciding what the agent can do on its own
+- deciding when it has to stop and ask me
 
-```text
-local model connection
-+ tool access
-+ workflow behavior
-+ structured state
-+ human approval boundaries
-```
+I did not build Hermes itself.
 
-rather than rebuilding tool dispatch, conversation state, and agent plumbing.
+## Use Ollama to serve the local model
 
-That means HammDroid is primarily an **integration and workflow project**. I am not claiming that I wrote Hermes itself.
+I wanted the model runtime separate from Hermes.
 
-## 3. Use Ollama as the local model service
-
-I wanted the agent runtime and the model runtime separated cleanly.
-
-The path I configured is:
+The setup is:
 
 ```text
 Hermes
-→ local provider endpoint
-→ Ollama
-→ local GGUF model
+→ Ollama endpoint
+→ local model
 → GPU
 ```
 
-This separation is useful because Hermes does not need to know how the model is stored or executed internally. It only needs a compatible endpoint.
+Hermes talks to Ollama through `http://localhost:11434/v1`. Ollama handles loading and running the model.
 
-Likewise, I can change the local model later without redesigning the entire workflow.
+This also means I can try a different local model later without rebuilding the rest of the workflow.
 
-I also moved the model storage to a dedicated drive because model files are large and do not need to live on the primary Windows volume.
+I moved the model files to `E:\AI\Models` because they are large and I did not want them taking up the main Windows drive.
 
-## 4. Start with one model instead of a model committee
+## Start with one model
 
-I explored the idea of multiple local models acting as judge/reviewer/executor roles.
+I looked at the idea of using several models for different jobs, such as one model doing the work and another reviewing it.
 
-That could be useful eventually, but it also adds:
+I decided not to start there. More models means more memory use, more waiting, more routing logic, and more things to troubleshoot.
 
-- more VRAM/RAM pressure
-- more inference time
-- routing logic
-- more failure paths
-- more questions about which model should override which
+For now I would rather get one model working through the full workflow first. If I find a real weakness that another model would help with, then I can add one for a reason.
 
-I decided that was backwards for the current stage.
+## Use Google Sheets instead of a database
 
-My rule is:
+The state I need right now is simple. It is mostly rows of job information such as company, role, status, dates, links, and notes.
 
-```text
-prove one-model workflow
-→ observe actual weaknesses
-→ add another model only if it solves a measured problem
-```
+Sheets gives me:
 
-I would rather have one understandable pipeline that works than three models whose interaction I cannot yet justify.
+- persistent storage
+- API access
+- a format I can open and edit myself
+- no separate database server to maintain
 
-## 5. Google Sheets instead of a database
+That is enough for the current stage.
 
-The job-search state I need right now is fundamentally tabular: jobs, companies, status, notes, dates, and related fields.
+If I later need stronger querying, relationships between records, several things writing at once, or better history, then moving to a database would make sense.
 
-I considered whether I needed a database and decided I did not yet.
+## Use the Sheets API instead of clicking through the site
 
-A database would give stronger querying, relations, concurrency, and transaction behavior, but it would also add infrastructure and maintenance before those are real requirements.
+If the agent needs to update the sheet, using the API is cleaner than automating mouse clicks in the browser.
 
-Google Sheets gives me something useful for this stage:
+The API gives me a simpler path to troubleshoot:
 
 ```text
-structured rows/cells
-+ persistent cloud state
-+ API access
-+ direct human visibility
-+ manual correction when needed
+OAuth
+→ API request
+→ spreadsheet operation
+→ returned result
 ```
 
-That last part matters. I do not want the agent's state hidden in a system I have to query just to see what it thinks happened.
+That already helped during setup because the problems came from different places. I had a credential path issue, an OAuth issue, a disabled API, and a malformed request. Those were easier to separate because the spreadsheet was being accessed through an API.
 
-If the workflow later grows enough that Sheets becomes the bottleneck, that will be evidence for moving to a database. I do not want to add one just because agent projects often have one.
+## Keep credentials out of Git
 
-## 6. API access for state instead of browser-driving the spreadsheet
+Hermes needs local OAuth files and token data, but those do not belong in the repo.
 
-If HammDroid needs to update a spreadsheet, I would rather have it call the Google Sheets API than automate mouse clicks and cell editing through the browser.
+The repo holds documentation and non-secret project files. OAuth client files, tokens, local Hermes state, and browser session files stay on the machine and are ignored by Git.
 
-The API path is clearer:
+## Keep final decisions with me
 
-```text
-agent
-→ OAuth token
-→ Sheets API request
-→ range/value operation
-→ returned state
-```
+I want the agent to handle repetitive work, but I do not want it inventing answers or submitting things I did not review.
 
-This gives me identifiable failure layers and structured responses.
-
-The OAuth/Sheets setup already proved why this matters: I hit separate failures in credential discovery, OAuth access, Google Cloud service enablement, and request formatting. Those would have been harder to isolate if the spreadsheet itself were being controlled through UI automation.
-
-## 7. Keep credentials outside the repository
-
-Hermes needs OAuth client/token material locally, but those files do not belong in Git.
-
-The separation I want is:
-
-```text
-repository
-→ documentation and non-secret project material
-
-local Hermes home
-→ OAuth client configuration
-→ tokens / refresh state
-→ runtime-specific local state
-```
-
-That is why `.gitignore` excludes the relevant credentials, token files, environment files, browser sessions, and `.hermes` state.
-
-## 8. Human approval is part of the architecture
-
-The goal is not to remove myself from the process entirely.
-
-There are actions where the agent can assist but should stop before making the final decision:
+It should stop for:
 
 - CAPTCHA
-- MFA/passkeys
+- MFA or passkeys
 - legal attestations
 - assessments
-- questions whose factual answer is not known
+- questions where the correct factual answer is unknown
 - final application submission
 
-The same applies to resume/application content. The agent cannot invent employment, dates, clearances, certifications, skills, or experience.
+It also should not make up employment history, dates, clearances, certifications, skills, or experience.
 
-I think of this as both a safety boundary and a state-integrity boundary. Once bad information enters an automated workflow, it can propagate quickly.
+## Keep the pieces separate enough to troubleshoot
 
-## 9. Build in layers I can troubleshoot
-
-The architecture I am aiming for is intentionally separable:
-
-```text
-local inference
-      ↓
-agent runtime
-      ↓
-tools / browser interaction
-      ↓
-structured state API
-      ↓
-human approval when required
-```
-
-Each layer should be testable on its own.
+I want to be able to tell which part failed instead of treating HammDroid as one big system.
 
 For example:
 
 ```text
-model does not answer
-→ inspect Ollama / model / endpoint
+model will not run
+→ check Ollama, the model, and the GPU
 
-Hermes cannot use local model
-→ inspect provider configuration
+Hermes cannot reach the model
+→ check the local provider settings and endpoint
 
-Google helper cannot authenticate
-→ inspect credential path / OAuth
+Google login fails
+→ check the credential path and OAuth setup
 
-OAuth succeeds but Sheets call fails
-→ inspect API enablement / request shape
+OAuth works but Sheets fails
+→ check API enablement and the request itself
 ```
 
-That is the main architectural principle behind HammDroid: add capabilities in a way that still lets me identify which component is failing.
+That is the main reason I am building it in layers.
 
-## Current direction
+## Next step
 
-The project is now at the point where the local runtime and the Google Sheets state integration have both been proven separately.
+The local model path and the Google Sheets path have both been tested on their own.
 
-The next meaningful work is not adding more infrastructure. It is connecting those proven pieces into a constrained job-search workflow and testing where the local model is actually good enough versus where human or stronger-model review is needed.
+The next useful step is connecting them into the job-search workflow and seeing where the local model is good enough and where I still need to step in.

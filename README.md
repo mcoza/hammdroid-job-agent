@@ -41,6 +41,14 @@ manual review
 structured CSV row
 ```
 
+The prototype uses only the Python standard library. Run it from the repository root with:
+
+```bash
+python prototype/job_finder_modes_local.py
+```
+
+It creates `job_finds.csv` in the current working directory. That local output file is ignored by Git so personal job-search state is not mixed with the source repository.
+
 This prototype does **not** scrape search results or apply automatically.
 
 ### Google Sheets state integration

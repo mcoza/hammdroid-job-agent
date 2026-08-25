@@ -23,6 +23,37 @@ The plan is to use the local model for normal work and leave room for a stronger
 
 That cloud review path is not built yet.
 
+### Cloud review when local gets stuck
+
+I do not want a cloud model handling every task. I want it to be the backup when the local model has a reason to ask for help.
+
+The basic idea is:
+
+```text
+local model tries the task
+→ worked?
+   yes → continue
+   no  → read the exact error
+          ↓
+        try once differently
+          ↓
+        still failing?
+          ↓
+        send the problem context to a stronger cloud model
+          ↓
+        get a diagnosis or second opinion
+```
+
+The cloud request should contain the task, exact error, what was already tried, and any relevant non-secret output. It should not send tokens, passwords, OAuth secrets, browser cookies, or entire sessions.
+
+Uncertainty can use the same path. If the local model is not confident or the evidence conflicts, the cloud model can act as a second opinion instead of being used for every normal step.
+
+There are also things that should go straight to me instead of another model, such as CAPTCHA, MFA, legal attestations, unknown personal facts, permission boundaries, and final application submission.
+
+The point is to use my own hardware for the volume and pay for stronger reasoning only when it may actually help.
+
+More detail and the logic map are in [Design Decisions](docs/design-decisions.md).
+
 ### Hermes for the agent layer
 
 I did not want to spend the project writing an agent framework from scratch. Hermes already handles the agent and tool side, so I can spend my time on the job-search workflow, integrations, and figuring out where the system needs human input.

@@ -1,215 +1,156 @@
 # HammDroid Job Agent
 
-HammDroid is my attempt to make job searching less repetitive without jumping straight to a giant autonomous application system.
+HammDroid is my local-first job-search agent project.
 
-I built it in layers because I wanted each piece to answer a real problem before I added the next one:
+The idea is not to build a giant autonomous system immediately. I want to automate the repetitive parts of job searching while keeping the workflow understandable, inexpensive to run, and under human control when the decision actually matters.
 
-```text
-manual search ideas
-→ local Python search helper
-→ tested search modes
-→ structured CSV state
-→ Hermes Agent integration
-→ Google Sheets API state
-→ future local-first automation
-```
-
-The point of the repo is not "AI applies to jobs." It is to show what I tried, what I learned from the results, why the design changed, and what is actually working now.
-
-## The problem I was trying to solve
-
-Job discovery was repetitive and inconsistent:
-
-- relevant roles are split across ATS platforms and employer career sites
-- early-career cybersecurity roles do not use one consistent title
-- qualification language can be more useful than title wording
-- broad searches still return senior, wrong-location, or otherwise weak matches
-- manually rebuilding the same searches and tracking the results wastes time
-
-So my first question was smaller than "how do I automate applications?"
+My approach has been:
 
 ```text
-Can I make discovery and tracking repeatable
-while keeping the final judgment under human control?
+prove one layer
+→ understand how it works
+→ see what problem appears next
+→ add only the next piece I actually need
 ```
 
-## 1. Prove the search logic locally
+This repository documents the pieces I have really configured and tested: the local AI runtime, Hermes Agent integration, Google OAuth/Sheets state, the failures I hit while connecting them, and the design decisions behind the architecture.
 
-The current helper is [`job_finder.py`](job_finder.py).
+## Why I am building it this way
 
-It lets me choose a job-search lane and one of three search modes:
+### Local-first instead of cloud-first
 
-```text
-1. Strict ATS-only
-2. Broad career sites
-3. Exact low-years phrase search
-```
-
-The script combines:
-
-```text
-company
-+ role terms
-+ experience terms
-+ location terms
-+ site filter
-```
-
-then URL-encodes the query with `urllib.parse.quote_plus`, opens it in the browser, and lets me save a reviewed result to `job_finds.csv`.
-
-The stored fields are:
-
-```text
-role, company, lane, site_found, years_expected,
-posted_date, date_found, url, status, notes
-```
-
-The original simpler proof of concept is retained in [`prototype/job_finder_poc.py`](prototype/job_finder_poc.py). The current root-level helper is the later mode-based iteration that grew out of that POC and the search experiments.
-
-Run the current helper with:
-
-```bash
-python job_finder.py
-```
-
-The script does **not** scrape result pages or submit applications.
-
-## 2. Change the search strategy when the results say I should
-
-I started with common ATS domains because they gave me a narrower target than general web search.
-
-Testing showed that ATS-only search worked, but it was too narrow for some employers. Company career pages and exact low-experience qualification phrases sometimes produced better results.
-
-That is why the script gained multiple modes instead of one increasingly huge query.
-
-The retained test data shows examples where:
-
-```text
-strict ATS search
-→ found valid Workday roles
-
-company career-page search
-→ found additional low-years roles
-
-exact qualification phrase
-→ surfaced associate/pathways-style roles
-```
-
-It also showed why search matches still need review. A result could have good qualification language but still have a `Principal` title, the wrong location, or a senior experience requirement.
-
-See [Search Strategy Experiments](docs/search-experiments.md) and [`examples/search_test_results.csv`](examples/search_test_results.csv).
-
-## 3. Keep human review before turning a result into state
-
-I deliberately did **not** make the first version decide "this is a good job, apply now."
-
-My early flow is:
-
-```text
-search
-→ inspect the actual posting/result
-→ decide whether it is useful
-→ save the structured record
-```
-
-That choice came from the test results. Search engines are good at retrieving candidate pages; that is not the same as understanding whether the posting is actually appropriate.
-
-The example CSVs show the record shape and the candidate/skip-style review that informed the next version.
-
-## 4. Start with CSV instead of overbuilding the state layer
-
-I used CSV first because I needed to prove the fields and workflow, not build infrastructure.
-
-At that stage the useful question was:
-
-```text
-Can I reliably capture the information I care about?
-```
-
-The answer was yes, and the schema was simple and tabular.
-
-That meant I had a usable state model before deciding where that state should live long term.
-
-## 5. Move toward Google Sheets instead of adding a database
-
-When I started connecting the workflow to Hermes Agent, I wanted state that was:
-
-- persistent
-- structured
-- API-accessible
-- easy for the agent to read/write
-- easy for me to inspect or correct directly
-
-Google Sheets fit that stage of the project better than a database.
-
-My reasoning was:
-
-```text
-CSV
-→ proves the schema locally
-→ tied to one local file/workflow
-
-Google Sheets
-→ keeps the same table model
-→ adds API access
-→ remains directly human-readable/editable
-```
-
-I am not treating Sheets as a production database. If I eventually need stronger concurrency, relational data, larger history, or transactional guarantees, that would be evidence for adding a database. I do not need that complexity yet.
-
-## 6. Use an API for structured state instead of clicking spreadsheet cells
-
-The current integration path is:
-
-```text
-Human
-  ↓
-Hermes Agent
-  ↓
-Google Workspace helper
-  ↓
-OAuth 2.0 token
-  ↓
-Google Sheets API
-  ↓
-structured spreadsheet state
-```
-
-The work included:
-
-- Google Desktop OAuth setup
-- tracing a credential-path mismatch to the Hermes home used by the helper
-- OAuth/test-user troubleshooting
-- reducing unrelated Workspace permissions
-- enabling `sheets.googleapis.com` after `SERVICE_DISABLED`
-- correcting a malformed Sheets write request
-- validating **create → write → read**
-
-Append behavior has not been separately validated.
-
-See [Google Sheets Integration](docs/google-sheets-integration.md).
-
-## 7. Keep routine work local when practical
-
-A design goal for HammDroid is to avoid making every repetitive search, classification, or orchestration step depend on paid cloud-model tokens.
+A job-search agent can make a lot of routine model calls. I do not want every classification, page review, or orchestration step to consume paid API tokens if my own machine can handle the repetitive work.
 
 The direction I am aiming for is:
 
 ```text
 routine repetitive work
-→ local agent/model where practical
+→ local model
 
-important or uncertain decision
-→ optional stronger cloud-model review/check
+uncertain / higher-value review
+→ optional stronger cloud model later
 ```
 
-That is a design direction, not a claim that the full local/cloud review pipeline is finished today.
+That keeps cost down and gives me more visibility into what is running locally.
 
-I want the local system to handle the routine work when it can, while still leaving room for a stronger external model to review ambiguous decisions occasionally rather than paying for every small step.
+### Hermes instead of writing an agent framework
 
-## 8. Keep consequential application actions human-controlled
+My goal is the job-search workflow, not rebuilding agent orchestration from scratch.
 
-There are points where I do not want the agent guessing or silently acting.
+Hermes provides the agent/runtime layer so I can focus on:
+
+```text
+local inference
++ tools
++ persistent state
++ workflow rules
++ human approval boundaries
+```
+
+I am not claiming that I wrote Hermes itself.
+
+### Google Sheets instead of a database
+
+The state I need right now is simple and tabular. I want the agent to read/write it through an API, but I also want to be able to open the same state myself and understand it immediately.
+
+So my current reasoning is:
+
+```text
+Google Sheets
+→ structured rows/cells
+→ persistent state
+→ API-accessible
+→ directly human-readable/editable
+```
+
+I do not currently need enough concurrency, relational structure, or transactional behavior to justify maintaining a database just because I can.
+
+## Current architecture
+
+The pieces I have proven separately look like this:
+
+```text
+                    LOCAL INFERENCE
+
+Hermes Agent
+    ↓ local provider
+http://localhost:11434/v1
+    ↓
+Ollama
+    ↓
+local GGUF model
+    ↓
+GPU
+
+                    STRUCTURED STATE
+
+Hermes Agent
+    ↓
+Google Workspace helper
+    ↓
+OAuth 2.0 token
+    ↓
+Google Sheets API
+    ↓
+job-search state
+```
+
+The next step is connecting these proven pieces into the actual constrained job-search workflow rather than adding more infrastructure first.
+
+## Local runtime I configured
+
+The current setup includes:
+
+- Ollama serving a local model on the machine
+- model storage moved to `E:\AI\Models`
+- `hf.co/ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M` used during the setup
+- the loaded model reported by `ollama ps` as running on the GPU
+- Hermes configured to use the local endpoint `http://localhost:11434/v1`
+- local terminal backend
+- minimal initial tool setup rather than enabling everything at once
+- HammDroid used as the Hermes agent name
+
+I configured Hermes with a large context setting during setup, but I treat that as a configuration value rather than claiming a measured effective context length.
+
+See [Local Runtime: Hermes + Ollama](docs/local-runtime.md).
+
+## Google Sheets integration I tested
+
+The Google integration work included:
+
+- Google Desktop OAuth client setup
+- resolving where the Hermes helper actually expected its credential files
+- handling OAuth testing/test-user access
+- reducing unrelated Google Workspace permissions
+- enabling `sheets.googleapis.com`
+- diagnosing `403 access_denied`
+- diagnosing `403 SERVICE_DISABLED`
+- diagnosing an HTTP 400 malformed write request
+- validating a spreadsheet **create → write → read** round trip
+
+The useful part was learning to separate the failure layers:
+
+```text
+credential exists but helper cannot find it
+→ path resolution
+
+403 access_denied
+→ OAuth consent / test-user configuration
+
+403 SERVICE_DISABLED
+→ Google Cloud API enablement
+
+HTTP 400 malformed write
+→ request construction
+```
+
+`append` behavior has not been separately validated.
+
+See [Google Sheets Integration](docs/google-sheets-integration.md).
+
+## Human control is part of the design
+
+I am not trying to make the agent silently answer every application question or submit anything it is unsure about.
 
 The intended workflow stops for:
 
@@ -224,52 +165,54 @@ The system also must not invent employers, dates, experience, clearances, certif
 
 That is both a safety boundary and a data-integrity boundary.
 
-## What is working now
+## What this project currently demonstrates
 
-**Built/tested:**
+| Area | Hands-on work represented |
+|---|---|
+| **Local AI runtime** | Ollama model storage/runtime, GPU-backed local inference, local model endpoint |
+| **Agent integration** | Hermes local-provider configuration, local terminal/tool baseline, runtime separation from model serving |
+| **OAuth 2.0** | Desktop client setup, test-user troubleshooting, local credential/token handling |
+| **Google Sheets API** | API activation, authenticated create/write/read validation, request-format troubleshooting |
+| **Integration troubleshooting** | separating path, authentication, service-enable, and request-format failures |
+| **Architecture decisions** | local-first inference, Sheets instead of premature database infrastructure, API state instead of UI-driven spreadsheet editing |
+| **Control boundaries** | explicit human stops for consequential or unverifiable application actions |
 
-- Python query construction
-- selectable search modes
-- browser launch of encoded searches
-- structured CSV output
-- manual result review
-- retained search-strategy test data
-- Hermes CLI/runtime availability
+## Current boundary
+
+### Configured / tested
+
+- local Ollama inference path
+- Hermes connected to the local model endpoint
+- model loading on GPU
+- local model storage configuration
 - Google Desktop OAuth setup
-- credential-path troubleshooting
-- Sheets API enablement
-- spreadsheet create/write/read validation
-- secrets/tokens excluded from Git
+- Hermes credential-path troubleshooting
+- Sheets API activation
+- create/write/read spreadsheet validation
+- repository secret exclusions
 
-**Not claimed as finished:**
+### Not claimed as complete
 
-- automatic result-page extraction
-- automatic deduplication
-- fit classification
-- production job tracker
-- append validation
-- complete local/cloud reviewer pipeline
-- automated application completion
-- application submission
+- automatic job discovery
+- job-page parsing
+- deduplication
+- job-fit classification benchmarks
+- browser-driven application completion
+- multi-model judge/reviewer architecture
+- automated local-to-cloud escalation
+- autonomous application submission
 
-## Repository map
+## Repository structure
 
 ```text
-job_finder.py                 current mode-based local helper
-
-prototype/
-  job_finder_poc.py           original simpler POC
-
-examples/
-  job_finds_poc.csv           initial record shape
-  search_test_results.csv     search-method test results
+README.md
 
 docs/
-  design-decisions.md         why I made the architecture choices
-  search-experiments.md       why the search modes changed
-  google-sheets-integration.md OAuth / Sheets troubleshooting trail
+  design-decisions.md
+  local-runtime.md
+  google-sheets-integration.md
 ```
 
-For the reasoning behind the project, start with [Design Decisions and Why I Made Them](docs/design-decisions.md).
+Start with [Design Decisions and Why I Made Them](docs/design-decisions.md) for the reasoning behind the project.
 
-No OAuth client secrets, access/refresh tokens, authorization codes, browser sessions, generated local job-tracking files, or local Hermes state are stored in this repository.
+No OAuth client secrets, tokens, authorization codes, browser sessions, or local Hermes credential state are stored in this repository.

@@ -36,7 +36,7 @@ The first prototype emphasized common ATS domains such as Workday, Greenhouse, L
 
 Testing showed that this worked, but it was not enough. For defense contractors in particular, company career pages and exact qualification phrases sometimes surfaced better low-years results than a strict ATS-only search.
 
-That is why the second version added three modes:
+That is why the next version added three modes:
 
 ```text
 1. Strict ATS-only
@@ -46,11 +46,11 @@ That is why the second version added three modes:
 
 The mode split was not added just to make the script more complicated. It came from comparing search results and seeing that one search pattern did not cover every employer well.
 
-The current version is in [`../prototype/job_finder_modes_local.py`](../prototype/job_finder_modes_local.py), and the experiment trail is documented in [`search-experiments.md`](search-experiments.md).
+That mode-based version is now the repository's current [`../job_finder.py`](../job_finder.py). The experiment trail is documented in [`search-experiments.md`](search-experiments.md).
 
 ## 3. Keep a human in the review loop
 
-The prototype intentionally opens the search and lets me review the result before saving it.
+The helper intentionally opens the search and lets me review the result before saving it.
 
 That is because a search result can look promising while still being wrong for the actual target.
 

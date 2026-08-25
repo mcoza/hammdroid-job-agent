@@ -1,91 +1,76 @@
 # HammDroid Job Agent
 
-HammDroid is a local job-search automation project that has progressed through two stages:
+HammDroid is a local job-search workflow project that started as a Python CLI and then moved toward an agent + Google Sheets integration.
 
-1. a **Python CLI prototype** for constructing targeted job searches and storing reviewed results in CSV
-2. a **Hermes Agent + Google Sheets integration** for moving that structured state into an API-backed workflow
+The repository is organized around **inspectable implementation and troubleshooting evidence**. It does not claim autonomous job discovery or application submission as finished functionality.
 
-The repository is intentionally scoped to what has actually been built, configured, or tested. It does not present autonomous job discovery or application submission as finished functionality.
+## What is actually in the repository
 
-## What is actually implemented
+```text
+prototype/
+  job_finder_csv_local_v1.py   original retained CLI prototype
+  job_finder_modes_local.py    later prototype with selectable search modes
 
-### Local Python search prototype
+docs/
+  prototype-evolution.md       code-level progression from v1 to v2
+  architecture.md              component and data boundaries
+  google-sheets-integration.md retained integration troubleshooting
 
-[`prototype/job_finder_modes_local.py`](prototype/job_finder_modes_local.py) is a working local prototype that:
+evidence/
+  hermes-runtime.md            sanitized local CLI evidence
+  google-oauth-debugging.md    sanitized OAuth/path/scope investigation
+```
 
-- defines job-search lanes as Boolean query fragments
-- separates strict ATS searches from broader career-site searches
-- includes low-years / education-substitution search phrases
-- URL-encodes generated queries with `urllib.parse.quote_plus`
-- opens the resulting search in the default browser
-- stores manually reviewed jobs in a structured CSV with `csv.writer`
-- initializes a repeatable record schema when the CSV does not exist
+No OAuth client secrets, tokens, authorization codes, browser sessions, or other credentials are stored here.
 
-The core flow is:
+## 1. Python search prototype
+
+The working Python prototype uses only the standard library.
+
+The basic data path is:
 
 ```text
 company
   + role lane
   + experience terms
   + location terms
-  + site filter
+  + search-mode site filter
         ↓
 build_query()
         ↓
-quote_plus()
+urllib.parse.quote_plus()
         ↓
-Google search URL
+webbrowser.open_new_tab()
         ↓
-manual review
+human reviews results
         ↓
-structured CSV row
+csv.writer.writerow()
+        ↓
+job_finds.csv
 ```
 
-The prototype uses only the Python standard library. Run it from the repository root with:
+The current version implements:
+
+- five role/search lanes
+- strict ATS, broad career-site, and exact low-years search modes
+- Boolean query construction
+- URL encoding with `quote_plus`
+- browser launch
+- input validation for lane/mode selection
+- a ten-field job-record schema
+- CSV initialization and append-style row writes
+
+Run it from the repository root with:
 
 ```bash
 python prototype/job_finder_modes_local.py
 ```
 
-It creates `job_finds.csv` in the current working directory. That local output file is ignored by Git so personal job-search state is not mixed with the source repository.
+The earlier retained version is also included so the iteration can be inspected directly instead of inferred from documentation. See [Python Prototype Evolution](docs/prototype-evolution.md).
 
-This prototype does **not** scrape search results or apply automatically.
+## 2. State model
 
-### Google Sheets state integration
-
-The current state-layer work uses Hermes Agent's Google Workspace tooling with Google OAuth and the Sheets API.
-
-The tested path is:
-
-```text
-Hermes workflow
-      ↓
-Google Workspace skill/helper
-      ↓
-OAuth 2.0 token
-      ↓
-Google Sheets API
-      ↓
-structured spreadsheet state
-```
-
-The integration work includes:
-
-- Google Desktop OAuth client setup
-- credential/token path troubleshooting
-- reducing broad Workspace permissions toward Sheets + read-only Drive access
-- diagnosing OAuth `403 access_denied`
-- diagnosing `403 SERVICE_DISABLED` for `sheets.googleapis.com`
-- diagnosing a malformed HTTP 400 write request
-- spreadsheet **create → write → read** round-trip validation
-
-`append` has not been separately validated.
-
-See [Google Sheets Integration](docs/google-sheets-integration.md) for the technical failure trail and [Technical Architecture](docs/architecture.md) for component boundaries.
-
-## Why the project changed from CSV to Sheets
-
-The Python prototype used this local schema:
+Both Python versions use the same core record shape:
 
 ```text
 role
@@ -100,118 +85,105 @@ status
 notes
 ```
 
-CSV was enough to prove the workflow, but an agent needs persistent state that can be read and updated independently of the browser session.
-
-That led to this design change:
+CSV was enough for the first local workflow, but it couples the state to one script and one filesystem. That motivated the next design question:
 
 ```text
-local CSV
-   ↓
-works for a single local script
-   ↓
-need shared/readable agent state
-   ↓
+local script state
+      ↓
+need state that an agent and a human can both inspect/update
+      ↓
+Google Sheets API integration
+```
+
+Sheets is being treated as a lightweight structured state layer, not as a production database.
+
+## 3. External agent runtime actually observed
+
+The local environment included a working Hermes Agent CLI. A retained `hermes --help` capture showed commands for configuration, skills, tools, projects, verification, logs, sessions, serving the backend, desktop mode, and one-shot invocation.
+
+That evidence is preserved in [Hermes Runtime Evidence](evidence/hermes-runtime.md).
+
+Hermes is an external runtime. HammDroid does **not** claim to implement Hermes, an inference engine, or its tool-calling framework.
+
+## 4. Google OAuth integration: concrete troubleshooting
+
+The strongest retained integration artifact is the setup/debugging trail rather than a finished wrapper library.
+
+### Credential discovery
+
+The Desktop OAuth client file existed and was valid, but the Google Workspace setup helper still reported that no client secret was stored.
+
+The investigation moved from credential validity to path resolution:
+
+```text
+credential JSON exists
+        ↓
+helper still cannot find it
+        ↓
+inspect CLIENT_SECRET_PATH / HERMES_HOME resolution
+        ↓
+standalone helper resolves under ~/.hermes
+        ↓
+credential location and helper lookup path did not match
+```
+
+This is documented with sanitized paths in [Google OAuth / Hermes Integration Evidence](evidence/google-oauth-debugging.md).
+
+### Scope reduction
+
+The stock Workspace helper exposed broader permissions than the job-tracking workflow needed. The setup work narrowed the target toward:
+
+```python
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+```
+
+That intentionally excludes Gmail, Calendar, Contacts, Docs, and full Drive access. `drive.readonly` is still general read-only Drive visibility, so it is not described here as single-file isolation.
+
+### Redirect handling
+
+The retained setup transcript also investigated a localhost redirect difference between the Desktop credential and the helper. The transcript does not retain a definitive token-exchange result, so this repository records that as an investigated issue rather than presenting a confirmed fix.
+
+## 5. Evidence status
+
+| Area | Repository evidence | Status |
+|---|---|---|
+| Python search/query construction | two retained `.py` versions | demonstrated |
+| CSV state schema/write path | source code | demonstrated |
+| Hermes runtime availability | sanitized CLI output | demonstrated |
+| OAuth Desktop credential use | retained setup transcript, secret removed | demonstrated |
+| Hermes credential-path debugging | retained setup transcript | demonstrated |
+| Workspace scope reduction | retained setup transcript / sanitized target config | demonstrated as setup work |
+| Sheets API create/write/read | described in later project notes, raw request/response not retained here | **not presented as reproduced evidence** |
+| automated result parsing | no implementation | not implemented |
+| fit classification / deduplication | no implementation | not implemented |
+| application submission | intentionally human-controlled | not implemented |
+
+## 6. Current component boundary
+
+```text
+HammDroid-controlled pieces
+────────────────────────────────────────
+Python query/state prototype
+job-record schema
+workflow constraints
+OAuth/Sheets integration configuration
+integration troubleshooting documentation
+
+External pieces
+────────────────────────────────────────
+Hermes Agent runtime/tool layer
+Google OAuth service
 Google Sheets API
+browser/search engine
 ```
 
-Sheets is being used as a lightweight structured state store, not as a replacement for a production database.
-
-## Technical areas demonstrated
-
-| Area | Hands-on work |
-|---|---|
-| **Python** | functions, dictionaries/configuration, input validation, `Path`, CSV I/O, URL encoding, browser invocation |
-| **Search construction** | Boolean query composition, role lanes, ATS domain filtering, location/experience filters |
-| **State design** | explicit job-record schema, CSV persistence, migration concept from local file state to Sheets |
-| **OAuth 2.0** | Desktop client flow, test-user access, token storage, scope reduction, callback/path troubleshooting |
-| **Google Sheets API** | API activation, create/write/read validation, malformed request debugging |
-| **Integration troubleshooting** | separating credential discovery, OAuth, scope, API-service, request-format, and application-state failures |
-| **Security boundaries** | secrets excluded from Git, reduced OAuth scope target, human stops for consequential actions |
-
-## Implementation boundary
-
-This repo does **not** claim that I wrote Hermes Agent, an inference engine, or Google's OAuth/Sheets client libraries.
-
-My work is the configuration and integration around those components plus the Python job-search prototype.
-
-```text
-external component             work represented here
-────────────────────────────────────────────────────────
-Hermes Agent runtime        → workflow/tool configuration
-Google OAuth               → client setup, scopes, token-flow troubleshooting
-Google Sheets API          → integration and request troubleshooting
-Python standard library    → local job-search prototype
-```
-
-The retained project evidence does not currently include enough configuration to make a precise public claim about the active local model/provider, so the repo does not use the model choice as a technical accomplishment.
-
-## Failure-driven troubleshooting
-
-The most useful part of the integration work was learning not to collapse every Google failure into "OAuth is broken."
-
-```text
-403 access_denied
-→ OAuth consent / test-user layer
-
-credential file not found by helper
-→ runtime path-resolution layer
-
-403 SERVICE_DISABLED
-→ Google Cloud API-enable layer
-
-HTTP 400 malformed write
-→ Sheets request-format layer
-```
-
-Each response changed the next troubleshooting question rather than triggering a full reconfiguration.
-
-## Current project status
-
-### Working / validated
-
-- Python query-building prototype
-- browser launch of encoded search queries
-- structured CSV output
-- Hermes CLI/runtime availability
-- Google Desktop OAuth setup
-- Sheets API enablement
-- spreadsheet create/write/read round trip
-- credential exclusions in `.gitignore`
-
-### Not yet claimed as working
-
-- automated job-result parsing
-- automated deduplication
-- fit classification
-- production job tracker
-- append validation
-- browser-driven application workflow
-- CAPTCHA/MFA handling beyond stopping for the user
-- application submission
+The point of the project is not to relabel external tooling as custom code. The useful technical work is in the interfaces between these pieces: query construction, state design, runtime configuration, credential discovery, scope selection, and failure isolation.
 
 ## Safety boundary
 
-Consequential application actions remain human-controlled. The intended workflow stops for:
-
-- CAPTCHA
-- MFA/passkeys
-- legal attestations
-- assessments
-- unknown factual questions
-- final application submission
+Consequential application actions remain human-controlled. The intended workflow stops for CAPTCHA, MFA/passkeys, legal attestations, assessments, unknown factual questions, and final submission.
 
 The system must not invent employers, dates, experience, clearances, certifications, skills, or application answers. Coursework, labs, homelabs, and portfolio work are not represented as professional employment.
-
-## Repository map
-
-```text
-README.md
-prototype/
-  job_finder_modes_local.py
-
-docs/
-  architecture.md
-  google-sheets-integration.md
-```
-
-No OAuth client secrets, tokens, authorization codes, browser sessions, or other credentials are stored in this repository.

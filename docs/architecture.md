@@ -1,68 +1,76 @@
 # Technical Architecture
 
-HammDroid is currently an **integration project**, not a custom agent framework. The agent runtime is provided by Hermes Agent. My work has been configuring the workflow around it, testing Google OAuth/Sheets access, defining job-search state, and iterating on a local Python search prototype.
+HammDroid currently has two concrete layers:
 
-That distinction matters because this repository should show what I actually built or configured instead of implying that I wrote Hermes, an LLM runtime, or the Google client libraries.
+1. a Python CLI that builds searches and stores reviewed jobs locally
+2. integration work that connects an external Hermes runtime to Google OAuth / Sheets tooling
 
-## Current implementation boundary
+The repository separates **code I wrote**, **configuration/integration I changed**, and **external components** so the architecture does not imply ownership of third-party systems.
 
-```text
-                    code/config I control
-                    ─────────────────────────────────────
+## 1. Python execution path
 
-Human input
-    ↓
-Hermes Agent configuration / workflow rules
-    ↓
-Hermes Google Workspace skill configuration
-    ↓
-OAuth credential + token handling
-    ↓
-Google Sheets API operations
-    ↓
-structured job-search state
-
-                    ─────────────────────────────────────
-                    external/runtime components
-```
-
-Hermes supplies the agent runtime and tool execution layer. Google supplies OAuth and the Sheets API. HammDroid's current technical work is the **configuration, integration, troubleshooting, state design, and workflow constraints between those systems**.
-
-## Earlier local prototype
-
-Before the agent/Sheets integration, I built a small Python CLI prototype that performed two concrete tasks:
+The current source is [`prototype/job_finder_modes_local.py`](../prototype/job_finder_modes_local.py).
 
 ```text
-company + search lane + search mode
-              ↓
-build_query()
-              ↓
-Google search query
-              ↓
-quote_plus()
-              ↓
-webbrowser.open_new_tab()
+main()
+  ↓
+read company from stdin
+  ↓
+choose_lane()
+  ↓
+choose_search_mode()
+  ↓
+build_query(company, lane_terms, mode_name, sites)
+  ↓
+quote_plus(query)
+  ↓
+webbrowser.open_new_tab(url)
 ```
 
-and:
+A reviewed job follows a separate path:
 
 ```text
-manually reviewed job
-        ↓
-collect structured fields
-        ↓
-csv.writer.writerow()
-        ↓
-job_finds.csv
+main()
+  ↓
+save_good_find(company)
+  ↓
+collect fields from stdin
+  ↓
+build row in HEADERS order
+  ↓
+open job_finds.csv in append mode
+  ↓
+csv.writer(file).writerow(row)
 ```
 
-The source is retained in [`prototype/job_finder_modes_local.py`](../prototype/job_finder_modes_local.py).
+`setup_csv()` creates the file and writes the header row only when the CSV does not already exist.
 
-The prototype is intentionally simple. It does **not** scrape job sites or submit applications. It builds targeted searches and records manually reviewed findings in a structured local CSV.
+## 2. Query configuration
 
-## Prototype data model
+Search behavior is configuration-driven rather than embedded in one long query string.
 
-The CSV schema is explicit in code:
+```text
+LANES
+  ├─ GRC / Audit / Compliance
+  ├─ Defense / RMF / NIST
+  ├─ SOC / Security Analyst
+  ├─ IT Support / Security Adjacent
+  └─ Privacy / Vendor Risk
+
+EXPERIENCE
+LOCATION
+EXCLUDE
+STRICT_ATS_SITES
+BROAD_CAREER_SITES
+```
+
+`build_query()` combines those values differently depending on the chosen mode.
+
+The earlier retained source used one `SITES` constant. The newer version split that into separate strict/broad modes and added a dedicated `build_query()` function. Both versions are retained so that change is inspectable. See [Python Prototype Evolution](prototype-evolution.md).
+
+## 3. Local state schema
+
+The state model is a ten-column record:
 
 ```python
 HEADERS = [
@@ -79,117 +87,112 @@ HEADERS = [
 ]
 ```
 
-This is the state model that later motivated moving from a local CSV to Google Sheets: the workflow needs persistent structured records that can be read and updated by an agent while remaining easy for a human to inspect.
+The prototype does not treat this as an ORM or database model. It is simply the ordered schema used to serialize manually reviewed jobs to CSV.
 
-## Search-query construction
+## 4. Agent / Sheets integration boundary
 
-The prototype separates search intent into configuration instead of hard-coding one query.
-
-### Role lanes
-
-`LANES` maps a user selection to a label and a Boolean search expression. Examples include GRC/audit, defense/RMF, SOC/security analysis, IT support, and vendor/privacy risk.
-
-### Experience filter
-
-`EXPERIENCE` contains low-years and education-substitution phrases used to bias the search toward roles that are plausible for an early-career applicant.
-
-### Site targeting
-
-Two search modes are implemented:
+The later integration work used an external Hermes Agent runtime and its Google Workspace helper.
 
 ```text
-Strict ATS-only
-→ Workday / Greenhouse / Lever / iCIMS / Taleo / SmartRecruiters
-
-Broad career sites
-→ ATS domains plus selected employer career domains / broader career patterns
+HammDroid workflow/configuration
+        ↓
+Hermes Agent runtime
+        ↓
+Google Workspace helper
+        ↓
+OAuth credential/token handling
+        ↓
+Google API request
+        ↓
+spreadsheet state
 ```
 
-A third mode searches exact low-years education phrases.
+### HammDroid-controlled work
 
-### Query encoding
+- job-search workflow rules
+- job-record schema
+- Python prototype
+- selection of required Google scopes
+- placement/configuration of runtime credential paths
+- troubleshooting of integration failures
+- human-stop rules for consequential actions
 
-The query is converted into a browser-safe URL using:
+### External implementation
+
+- Hermes Agent CLI/runtime/tool execution
+- Google OAuth authorization service
+- Google Sheets API
+- browser and search engine
+
+## 5. Credential path behavior observed during setup
+
+The retained setup transcript showed the Google Workspace helper building paths from a Hermes home location, including:
 
 ```python
-url = "https://www.google.com/search?q=" + quote_plus(query)
+CLIENT_SECRET_PATH = HERMES_HOME / "google_client_secret.json"
+PENDING_AUTH_PATH = HERMES_HOME / "google_oauth_pending.json"
 ```
 
-`quote_plus()` URL-encodes spaces and reserved characters so the constructed Boolean query can be passed in the Google search URL.
-
-## Current Sheets state path
-
-The current integration replaces the CSV as the intended state layer:
+A concrete failure occurred when the Desktop OAuth JSON existed in one directory but the standalone setup helper resolved its credential path under `~/.hermes`.
 
 ```text
-Hermes workflow
-    ↓
-Google Workspace skill
-    ↓
-OAuth 2.0 token
-    ↓
-Google Sheets API
-    ↓
-spreadsheet rows/cells
+file exists
+  +
+helper reports no client secret
+        ↓
+inspect path construction
+        ↓
+compare actual file location with resolved CLIENT_SECRET_PATH
 ```
 
-The tested integration is documented in [`google-sheets-integration.md`](google-sheets-integration.md).
+That troubleshooting trail is preserved in [`evidence/google-oauth-debugging.md`](../evidence/google-oauth-debugging.md).
 
-## Credential flow
+## 6. Scope boundary
 
-The Hermes Google Workspace helper resolves credential/token files from the Hermes home directory. The setup work used these logical files:
+The broad Workspace helper scopes were not appropriate for a job tracker that primarily needed spreadsheet state.
+
+The retained setup work targeted:
+
+```python
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+```
+
+This was intended to remove Gmail, Calendar, Contacts, Docs, and full Drive permissions while retaining Sheets read/write access and read-only Drive visibility.
+
+The repository is explicit that `drive.readonly` still grants read-only visibility beyond a single spreadsheet.
+
+## 7. Runtime evidence
+
+A local `hermes --help` capture is retained in sanitized form at [`evidence/hermes-runtime.md`](../evidence/hermes-runtime.md). It proves that the runtime/CLI was present during the project without treating Hermes itself as HammDroid code.
+
+## 8. Evidence boundary
+
+The source repository directly demonstrates:
 
 ```text
-google_client_secret.json  → OAuth Desktop client configuration
-google_oauth_pending.json  → temporary authorization-flow state
-google_token.json          → stored OAuth token/refresh information
+Python query generation      yes
+URL encoding/browser launch  yes
+CSV schema/write path        yes
+Hermes CLI presence          retained runtime evidence
+OAuth path investigation     retained setup evidence
+scope reduction work         retained setup evidence
 ```
 
-These files are deliberately excluded by `.gitignore`.
+Later notes describe Sheets API error handling and a create/write/read round trip, but the raw API request/response artifact was not recovered with the retained chat export. The architecture therefore does not use that later result as proof of an implemented Sheets client.
 
-The flow is:
+## 9. Not implemented
 
-```text
-Desktop OAuth client JSON
-        ↓
-OAuth authorization request
-        ↓
-user consent / callback
-        ↓
-token exchange
-        ↓
-stored token
-        ↓
-authenticated Sheets API request
-```
+The repository does not currently contain code for:
 
-## What has been validated
-
-Supported by the retained project work:
-
-```text
-Hermes CLI installed / available                     validated
-Google Desktop OAuth client used                     validated
-OAuth test-user issue diagnosed                      validated
-Sheets API SERVICE_DISABLED failure diagnosed        validated
-Sheets API enabled                                   validated
-spreadsheet create → write → read round trip         documented as validated
-append operation                                     not separately validated
-full job-discovery agent                             not implemented
-job-site scraping                                    not implemented
-application submission                               not implemented
-```
-
-## What is intentionally not claimed
-
-This repository does not claim that I implemented:
-
-- Hermes Agent itself
-- an LLM inference engine
-- Google's OAuth libraries
-- a production web scraper
-- autonomous job applications
+- job-site scraping
+- automatic result extraction
+- automatic deduplication
+- fit scoring/classification
+- a production database
+- automated application submission
 - CAPTCHA/MFA bypass
-- a production-grade database
 
-The technical value of the project is in the integration work: moving from a local Python/CSV proof of concept toward an agent workflow with API-backed structured state, while debugging authentication, API-service, request-format, and permission boundaries.
+Those remain future workflow requirements rather than current architecture components.

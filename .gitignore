@@ -12,16 +12,13 @@ token.json
 .env.*
 !.env.example
 
-# Local prototype output
-job_finds.csv
-
 # Browser/session artifacts
 cookies.json
 session.json
 browser-profile/
 user-data-dir/
 
-# Python
+# Python/runtime caches
 __pycache__/
 *.py[cod]
 .venv/

@@ -22,6 +22,59 @@ The cloud review part is still an idea, not a finished feature.
 
 Local inference also makes the setup easier for me to inspect. I can check which model is loaded, whether it is using the GPU, where the files are stored, and which endpoint Hermes is calling.
 
+## Use the cloud model when the local model gets stuck
+
+I do not want the cloud model handling every task. I want it to be the second set of eyes when the local model has a reason to ask for help.
+
+A failure path I want to test looks like this:
+
+```mermaid
+flowchart TD
+    A[Task] --> L[Local model]
+    L --> Q{Worked?}
+
+    Q -->|Yes| C[Continue]
+    Q -->|No| R[Read the exact error]
+
+    R --> T[Try once differently]
+    T --> Q2{Worked?}
+
+    Q2 -->|Yes| C
+    Q2 -->|No| E[Send problem context to cloud reviewer]
+
+    E --> D[Get diagnosis or second opinion]
+    D --> H{Human-only step?}
+
+    H -->|No| L
+    H -->|Yes| U[Stop and ask me]
+```
+
+The point is not to use the cloud model as a blind fallback. The local side should first collect enough information to make the cloud request useful.
+
+That could include:
+
+- what task it was trying to do
+- the exact error
+- what it already tried
+- the relevant non-secret configuration or output
+- what it thinks may be wrong
+
+I do not want it sending secrets, OAuth tokens, browser cookies, passwords, or entire sessions just because something failed.
+
+The same idea can work for uncertainty even when there is no hard error:
+
+```text
+local model reaches a clear answer
+→ continue locally
+
+local model is unsure or evidence conflicts
+→ ask the cloud model for a second opinion
+```
+
+Some things should not go through that loop at all. If the blocker is CAPTCHA, MFA, a legal attestation, an unknown personal fact, a permission boundary, or final submission, the next step is me, not another model.
+
+This lets me use my own hardware for the volume while saving cloud calls for cases where stronger reasoning may actually help.
+
 ## Hermes instead of building an agent framework
 
 The part I care about is the job-search workflow. I do not need to build tool routing and agent plumbing from scratch just to get there.
@@ -140,4 +193,4 @@ That is the main reason I am building it in layers.
 
 The local model path and the Google Sheets path have both been tested on their own.
 
-The next useful step is connecting them into the job-search workflow and seeing where the local model is good enough and where I still need to step in.
+The next useful step is connecting them into the job-search workflow and seeing where the local model is good enough, where a cloud review actually helps, and where I still need to step in.
